@@ -1,6 +1,6 @@
 # Whitelisting the Polkadot App user onboarding calls: decoded calls
 
-Decoded by `src/decode.mjs` from the bytes in `calls.json` against live metadata (Asset Hub 2005000, People 2005000, Bulletin 2005000, Collectives 2005000). Every hash below is recomputed from the bytes.
+Decoded by `src/cli/decode.ts` from the bytes in `calls.json` against live metadata (Asset Hub 2005000, People 2005000, Bulletin 2005000, Collectives 2005000). Every hash below is recomputed from the bytes.
 
 ## Referendum preimage (Asset Hub, Whitelisted Caller track)
 

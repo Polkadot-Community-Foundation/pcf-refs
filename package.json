@@ -3,23 +3,34 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18"
   },
   "scripts": {
-    "encode": "node src/encode.mjs",
-    "decode": "node src/decode.mjs",
-    "preflight": "node src/preflight.mjs",
-    "dry-run": "node src/dry-run.mjs",
-    "verify": "node src/verify.mjs",
-    "rehearse": "node src/rehearse.mjs",
-    "check": "node src/encode.mjs --check && node src/decode.mjs && node src/preflight.mjs && node src/dry-run.mjs"
-  },
-  "dependencies": {
-    "@polkadot-api/substrate-bindings": "0.20.3",
-    "polkadot-api": "2.2.2",
-    "viem": "2.52.2"
+    "postinstall": "papi",
+    "pin": "node src/cli/pin.ts",
+    "encode": "node src/cli/encode.ts",
+    "decode": "node src/cli/decode.ts",
+    "preflight": "node src/cli/preflight.ts",
+    "dry-run": "node src/cli/dry-run.ts",
+    "rehearse": "node src/cli/rehearse.ts",
+    "verify": "node src/cli/verify.ts",
+    "check": "npm run encode -- --check && npm run decode && npm run preflight && npm run dry-run",
+    "papi:update": "papi update && papi",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
+    "typecheck": "tsc",
+    "test": "node --test test/*.test.ts"
   },
   "devDependencies": {
-    "@acala-network/chopsticks": "1.5.2"
+    "@acala-network/chopsticks": "1.5.2",
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "24.19.1",
+    "typescript": "6.0.3"
+  },
+  "dependencies": {
+    "@polkadot-api/descriptors": "file:.papi/descriptors",
+    "@polkadot-api/substrate-bindings": "0.21.2",
+    "polkadot-api": "3.2.1",
+    "viem": "2.57.3"
   }
 }
