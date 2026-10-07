@@ -1,0 +1,41 @@
+{
+  "title": "Whitelisting the Polkadot App user onboarding calls",
+  "endpoints": {
+    "relay": "wss://rpc.polkadot.io",
+    "assetHub": "wss://polkadot-asset-hub-rpc.polkadot.io",
+    "people": "wss://polkadot-people-rpc.polkadot.io",
+    "bulletin": "wss://bulletin-rpc.polkadot.io",
+    "collectives": "wss://polkadot-collectives-rpc.polkadot.io"
+  },
+  "attester": "15sDLj4T9NnCtT665koDMxBs1PZw3rzDc6wcz9tN9kKTQ2zj",
+  "count": 1000000,
+  "dispatcher": "0xA06d1CB1e3FedFF7b5dFa779b4Cc61703F8A46A1",
+  "names": [
+    "getcash",
+    "dotns",
+    "browse"
+  ],
+  "namesOwner": "0xA5C4c241985D77A0296a0FB83E0FA5905e9E39De",
+  "dotns": {
+    "release": "https://github.com/Polkadot-Community-Foundation/dotns/releases/tag/v1.0.0-pcf.1",
+    "nameWhitelist": "0xEc2f4c007b51c35DEfa96bF654f357Fc850362Ab",
+    "registrarController": "0x76c19abE11404e43445670F13173AFA60BED53f8",
+    "registrar": "0x37442d086e282F7C497FC4Ffe00D0A06B84a1f81"
+  },
+  "grantWeight": {
+    "refTime": "10000000000",
+    "proofSize": "1000000"
+  },
+  "grantStorageDepositLimit": "10000000000",
+  "bulletin": {
+    "authorizer": "1YoKNfXM43vegdG6g4XHCDPK6EGykYgHPNkXfRL6etnma1b",
+    "transactions": 5000,
+    "bytes": "10737418240",
+    "validDays": 365,
+    "validUntil": 7396458,
+    "feeless": true
+  },
+  "enactInDays": 14,
+  "enactAt": 33532322,
+  "submitter": null
+}

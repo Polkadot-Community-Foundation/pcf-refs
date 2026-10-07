@@ -1,0 +1,25 @@
+{
+  "name": "pcf-governance",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "encode": "node src/encode.mjs",
+    "decode": "node src/decode.mjs",
+    "preflight": "node src/preflight.mjs",
+    "dry-run": "node src/dry-run.mjs",
+    "verify": "node src/verify.mjs",
+    "rehearse": "node src/rehearse.mjs",
+    "check": "node src/encode.mjs --check && node src/decode.mjs && node src/preflight.mjs && node src/dry-run.mjs"
+  },
+  "dependencies": {
+    "@polkadot-api/substrate-bindings": "0.20.3",
+    "polkadot-api": "2.2.2",
+    "viem": "2.52.2"
+  },
+  "devDependencies": {
+    "@acala-network/chopsticks": "1.5.2"
+  }
+}
