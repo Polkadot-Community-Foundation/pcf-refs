@@ -1,6 +1,6 @@
 /**
  * `npm run dry-run`: executes every leg of the published package on live state with `DryRunApi`. Nothing is
- * submitted. Writes DRY_RUN.md.
+ * submitted. Writes reports/dry-run.{md,json}.
  *
  * 1. Root: the inner batch with Root on Asset Hub, then each forwarded XCM on People and Bulletin.
  * 2. Fellowship: the Fellowship proposal with the Fellows origin on Collectives, then its XCM on Asset Hub.
@@ -12,8 +12,8 @@
  */
 import { Enum, type HexString } from "polkadot-api";
 import { decodeEventLog, type Hex } from "viem";
-import { CHAIN_NAMES, type Chain, type Chains, connect, PARA } from "../lib/chains.ts";
-import { main, parseCommand } from "../lib/cli.ts";
+import { CHAIN_NAMES, type Chain, type Chains, connect, describeState, PARA, stateOf } from "../lib/chains.ts";
+import { finish, main, parseCommand } from "../lib/cli.ts";
 import { WHITELIST_ABI } from "../lib/dotns.ts";
 import { eventNames, findEvents, type RuntimeEvent } from "../lib/events.ts";
 import { formatDot, fromHex, sameAccount, sameAddress, toHex, toJson, toSs58 } from "../lib/format.ts";
@@ -38,13 +38,8 @@ main(async () => {
   const chains = await connect(params.endpoints, ["assetHub", "people", "bulletin", "collectives"]);
   const report = new Report();
   const ctx: Context = { chains, pkg, params, report };
-  const { assetHub: ah, people, bulletin, collectives } = chains;
 
   try {
-    report.info(
-      "state",
-      `Asset Hub #${ah.block} ${ah.at}, People #${people.block}, Bulletin #${bulletin.block}, Collectives #${collectives.block}`,
-    );
     report.info("package", `inner call ${pkg.rootBatchHash}, preimage ${pkg.refPreimageHash}`);
     await rootLeg(ctx);
     await fellowshipLeg(ctx);
@@ -56,14 +51,15 @@ main(async () => {
     chains.close();
   }
 
-  report.write(
-    proposal.path("DRY_RUN.md"),
-    `Dry run: ${params.title}`,
-    `DryRunApi against live Polkadot state by \`src/cli/dry-run.ts\`. Asset Hub block #${ah.block} (\`${ah.at}\`), People #${people.block} (\`${people.at}\`), Bulletin #${bulletin.block} (\`${bulletin.at}\`), Collectives #${collectives.block} (\`${collectives.at}\`). Runtimes ${ah.spec}.`,
-    `Inner call hash \`${pkg.rootBatchHash}\`, preimage hash \`${pkg.refPreimageHash}\`.`,
-  );
-  console.log(`\n${report.failed ? "DRY RUN FAILED" : "dry run green"}; wrote ${proposal.path("DRY_RUN.md")}`);
-  return report.failed ? 1 : 0;
+  return finish(report, proposal, "dry-run", {
+    command: "dry-run",
+    title: `Dry run: ${params.title}`,
+    intro: [
+      `DryRunApi against live Polkadot state by \`src/cli/dry-run.ts\`; nothing is submitted. State: ${describeState(chains)}.`,
+      `Inner call hash \`${pkg.rootBatchHash}\`, preimage hash \`${pkg.refPreimageHash}\`.`,
+    ],
+    state: stateOf(chains),
+  });
 });
 
 /** Leg 1: the batch with Root on Asset Hub, and its XCMs on their destinations. */

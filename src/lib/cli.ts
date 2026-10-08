@@ -3,6 +3,7 @@
  */
 import { type ParseArgsOptionsConfig, parseArgs } from "node:util";
 import { DEFAULT_PROPOSAL, loadProposal, type Proposal } from "./proposal.ts";
+import type { Report, ReportMeta } from "./report.ts";
 
 const COMMON = { proposal: { type: "string", default: DEFAULT_PROPOSAL } } as const;
 
@@ -28,4 +29,11 @@ export function main(command: () => Promise<number>): void {
       process.exit(1);
     },
   );
+}
+
+/** Writes a command's report into the proposal's reports folder, prints the outcome and returns the exit code. */
+export function finish(report: Report, proposal: Proposal, name: string, meta: ReportMeta): number {
+  const path = report.write(proposal.reports, name, meta);
+  console.log(`\n${meta.command}: ${report.failed ? "FAILED" : "all checks as expected"}; wrote ${path}`);
+  return report.failed ? 1 : 0;
 }

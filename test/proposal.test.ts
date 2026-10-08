@@ -7,7 +7,7 @@ import { loadProposal, type Params, requirePinned } from "../src/lib/proposal.ts
 
 /** Copies the app-onboarding proposal to a temp folder with `edit` applied to its params. */
 function withParams(edit: (p: Params) => void): string {
-  const dir = mkdtempSync(join(tmpdir(), "pcf-governance-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "pcf-refs-test-"));
   cpSync("proposals/app-onboarding", dir, { recursive: true });
   const params = JSON.parse(readFileSync(join(dir, "params.json"), "utf8")) as Params;
   edit(params);

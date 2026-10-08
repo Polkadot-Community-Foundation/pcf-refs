@@ -13,6 +13,9 @@ export const descriptors = { relay, assetHub, people, bulletin, collectives } as
 export type ChainKey = keyof typeof descriptors;
 export type Descriptors = typeof descriptors;
 
+/** RPC endpoints per chain, in order of preference; the client fails over to the next one. */
+export type Endpoints = Record<ChainKey, string[]>;
+
 export const CHAIN_NAMES: Record<ChainKey, string> = {
   relay: "Polkadot",
   assetHub: "Asset Hub",
@@ -44,10 +47,7 @@ export interface Chain<K extends ChainKey> {
 export type Chains<K extends ChainKey> = { [P in K]: Chain<P> } & { close(): void };
 
 /** Connects to `keys` over WebSocket and pins each to its current finalized block. */
-export async function connect<K extends ChainKey>(
-  endpoints: Record<ChainKey, string>,
-  keys: readonly K[],
-): Promise<Chains<K>> {
+export async function connect<K extends ChainKey>(endpoints: Endpoints, keys: readonly K[]): Promise<Chains<K>> {
   const entries = await Promise.all(
     keys.map(async (key) => {
       const client = createClient(getWsProvider(endpoints[key]));
@@ -64,3 +64,19 @@ export async function connect<K extends ChainKey>(
   };
   return chains;
 }
+
+/** Block number, hash and runtime of each connected chain, for report logs. */
+export function stateOf(chains: Partial<Record<ChainKey, Chain<ChainKey>>>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.values(chains)
+      .filter((c): c is Chain<ChainKey> => typeof c === "object" && c !== null && "key" in c)
+      .map((c) => [c.key, { block: c.block, hash: c.at, spec: c.spec }]),
+  );
+}
+
+/** One-line description of the blocks `chains` are pinned to. */
+export const describeState = (chains: Partial<Record<ChainKey, Chain<ChainKey>>>): string =>
+  Object.values(chains)
+    .filter((c): c is Chain<ChainKey> => typeof c === "object" && c !== null && "key" in c)
+    .map((c) => `${CHAIN_NAMES[c.key]} #${c.block} (\`${c.at}\`)`)
+    .join(", ");

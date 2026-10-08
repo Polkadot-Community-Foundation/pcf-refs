@@ -1,6 +1,6 @@
 /**
  * `npm run rehearse`: runs the whole governance sequence on a Chopsticks fork of live Asset Hub, People, Bulletin and
- * Collectives, connected over XCM. Writes REHEARSAL.md.
+ * Collectives, connected over XCM. Writes reports/rehearsal.{md,json}.
  *
  * 1. The Fellowship referendum enacts on Collectives (scheduled with the Fellows origin) and whitelists the call on
  *    Asset Hub.
@@ -17,9 +17,9 @@
  */
 import { Bytes } from "@polkadot-api/substrate-bindings";
 import type { HexString } from "polkadot-api";
-import { type Chain, type Chains, connect } from "../lib/chains.ts";
+import { type Chain, type Chains, connect, stateOf } from "../lib/chains.ts";
 import { devRpc, Fork } from "../lib/chopsticks.ts";
-import { main, parseCommand } from "../lib/cli.ts";
+import { finish, main, parseCommand } from "../lib/cli.ts";
 import { checkEnacted } from "../lib/enacted.ts";
 import { eventNames, findEvents, notableEvents, type RuntimeEvent } from "../lib/events.ts";
 import { fromHex, toHex, toJson } from "../lib/format.ts";
@@ -43,9 +43,11 @@ main(async () => {
   console.log("starting chopsticks (forking live state, takes a minute)…");
   const fork = await Fork.start(p.endpoints, FORKED, Number(flags["port-base"]));
   let chains: ForkedChains | undefined;
+  let forkedAt: Record<string, unknown> = {};
   try {
     const live = await connect(fork.endpoints, FORKED);
     chains = live;
+    forkedAt = stateOf(live);
     // Chopsticks builds catch-up blocks right after connecting the chains, and storage set during one of them is
     // lost. newBlock queues behind them, so one block per chain settles the forks before anything is injected.
     await Promise.all(FORKED.map((k) => devRpc(live[k].client).newBlock()));
@@ -71,14 +73,15 @@ main(async () => {
     if (!flags.keep) fork.stop();
   }
 
-  report.write(
-    proposal.path("REHEARSAL.md"),
-    `Rehearsal (Chopsticks): ${p.title}`,
-    "End-to-end probe by `src/cli/rehearse.ts` on a Chopsticks fork of live Asset Hub, People, Bulletin and Collectives. The Fellowship referendum and the Whitelisted Caller referendum are enacted through the scheduler with their real origins; voting is not simulated.",
-    `Inner call hash \`${pkg.rootBatchHash}\`, preimage hash \`${pkg.refPreimageHash}\`.`,
-  );
-  console.log(`\n${report.failed ? "REHEARSAL FAILED" : "rehearsal green"}; wrote ${proposal.path("REHEARSAL.md")}`);
-  return report.failed ? 1 : 0;
+  return finish(report, proposal, "rehearsal", {
+    command: "rehearse",
+    title: `Rehearsal (Chopsticks): ${p.title}`,
+    intro: [
+      "End-to-end probe by `src/cli/rehearse.ts` on a local Chopsticks fork of live Asset Hub, People, Bulletin and Collectives; nothing reaches the live chains. The Fellowship referendum and the Whitelisted Caller referendum are enacted through the scheduler with their real origins; voting is not simulated.",
+      `Inner call hash \`${pkg.rootBatchHash}\`, preimage hash \`${pkg.refPreimageHash}\`.`,
+    ],
+    state: forkedAt,
+  });
 });
 
 /** Step 1: schedule the Fellowship proposal with the Fellows origin, then let Asset Hub receive the whitelist. */

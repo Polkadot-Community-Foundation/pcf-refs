@@ -1,12 +1,30 @@
-# pcf-governance
+# pcf-refs
 
-Encodes, decodes, checks and dry-runs the governance calls PCF proposes to the Polkadot Technical Fellowship. The
-tooling never signs or submits anything.
+Call data and dry runs for the governance referenda the Polkadot Community Foundation (PCF) proposes on Polkadot.
 
-Each proposal lives in `proposals/<name>/`. `params.json` is the only input; everything else in that folder is
-generated and committed, so anyone can regenerate it and diff it.
+**This repository never signs or dispatches anything on chain.** It does three things:
 
-## Current proposal: `proposals/app-onboarding`
+1. **Generates call data**: every call of a proposal, the preimage and the referendum submissions, encoded offline
+   from runtime metadata committed in this repository.
+2. **Executes dry runs**: each call with the origin it will have once enacted, against live Polkadot state
+   (`DryRunApi`) and on a local Chopsticks fork that runs the whole sequence end to end.
+3. **Logs the outcomes**: every check states the outcome it expects. PASS means the observed outcome is the expected
+   one, including expected errors; FAIL means it is not. Each run writes a Markdown report and a JSON log.
+
+Signing and submitting happen outside this repository, by the accounts that own each step.
+
+## Proposals
+
+Each proposal lives in `proposals/<name>/`:
+
+| File | Committed | Content |
+|---|---|---|
+| `params.json` | yes | the only input: addresses, amounts, names, budgets, enactment block, RPC endpoints |
+| `calls.json` | yes | every encoded call, both hashes and the deadlines |
+| `BREAKDOWN.md` | yes | the call data decoded call by call against live metadata |
+| `reports/` | no | reports (`.md`), logs (`.json`) and console output (`.log`) of the online commands; published by CI and in releases |
+
+### `app-onboarding`
 
 *Whitelisting the Polkadot App user onboarding calls.* One `Utility.batch_all` on Asset Hub, dispatched with Root
 through the Whitelisted Caller track:
@@ -22,17 +40,40 @@ through the Whitelisted Caller track:
 The Fellowship whitelists the hash of that batch with a referendum on Collectives (Fellows origin, an XCM
 `Whitelist.whitelist_call` to Asset Hub). The Asset Hub referendum carries
 `Whitelist.dispatch_whitelisted_call_with_preimage(batch)` with a fixed `At(enactAt)` enactment, so it cannot enact
-before the whitelist lands.
+before the whitelist lands. The Fellowship referendum must be submitted 8 days before `enactAt` (7-day decision
+plus a day of margin) and the whitelist must be on Asset Hub 24 hours before it; `calls.json` records both as relay
+blocks.
 
-| File | Content |
-|---|---|
-| `params.json` | addresses, amounts, names, Bulletin budget, enactment block, endpoints |
-| `calls.json` | every encoded call, the inner call hash, the preimage hash and the deadlines |
-| `BREAKDOWN.md` | the bytes decoded call by call, for the forum post |
-| `PREFLIGHT.md` | live state before submission |
-| `DRY_RUN.md` | DryRunApi results of every leg |
-| `REHEARSAL.md` | end-to-end run on a Chopsticks fork |
-| `STATE.md` | live state after enactment (written by `verify`) |
+## Releases
+
+A release is cut by pushing a tag `<proposal>/v<n>` to a commit on `main`, or `<proposal>/v<n>-rc<m>` for a
+pre-release. The release workflow re-runs every check on a clean runner and publishes, only if every check passed:
+
+- the call data as hex files (`preimage.hex`, `inner-call.hex`, `note-preimage.hex`, `referenda-submit.hex`,
+  `fellowship-submit.hex`) and `calls.json`;
+- the preflight, dry-run and rehearsal reports, with their JSON logs and console output;
+- a tarball of all of it with `SHA256SUMS`, and release notes listing both hashes, the deadlines and the outcome of
+  each report.
+
+To verify a release:
+
+```sh
+tar xzf <tag>.tar.gz && (cd <proposal> && sha256sum -c SHA256SUMS)
+git checkout <commit from the release notes> && npm ci
+npm test        # re-encodes calls.json offline and compares byte for byte
+npm run check   # decode, preflight and dry run against live Polkadot
+```
+
+## Continuous checks
+
+| Workflow | When | What |
+|---|---|---|
+| `ci` | every pull request and push to `main` | lint, typecheck, and the offline tests (re-encode every proposal and compare byte for byte) |
+| `dry-run` | daily, on pull requests touching proposals or code, and on demand | all online commands for a proposal; reports and logs are uploaded as an artifact and summarized on the run page |
+| `release` | on a release tag | everything above, then the release |
+
+The daily run fails when a runtime upgrade invalidates the published call data, or when the chain state the proposal
+expects has changed (for example once it is enacted).
 
 ## Setup
 
@@ -42,64 +83,52 @@ Node 22.18 or later (`.nvmrc` pins 24). The scripts are TypeScript run directly 
 npm ci
 ```
 
-`npm ci` also generates the typed chain descriptors from the metadata committed in `.papi/metadata`.
-
-## Reproduce the published package
-
-```sh
-npm test        # offline: re-encodes every proposal and compares with its calls.json
-npm run check   # online: the same, then decode, preflight and dry run against live Polkadot
-```
-
-Encoding is offline: it uses the runtime metadata committed in `.papi/`, so `calls.json` is a pure function of
-`params.json` and those runtimes. The online commands check that the live runtimes are still the ones encoded for.
+`npm ci` also generates the typed chain descriptors (polkadot-api) from the metadata in `.papi/metadata`.
 
 ## Commands
 
 | Command | Network | What it does |
 |---|---|---|
-| `npm run pin` | relay, Bulletin | Fills a `null` `enactAt` (relay block now + `enactInDays`) and `bulletin.validUntil` (Bulletin block now + `validDays`) in `params.json`. |
+| `npm run pin` | relay, Bulletin | Fills a `null` `enactAt` (relay block now + `enactInDays`) and `bulletin.validUntil` (Bulletin block now + `validDays`) in `params.json`. Values already set are kept. |
 | `npm run encode` | none | Encodes the package into `calls.json`. `-- --check` compares instead of writing. |
 | `npm run decode` | all | Decodes `calls.json` against live metadata into `BREAKDOWN.md`, following each XCM `Transact` into the destination chain and the Revive calldata into the DotNS ABI. Recomputes every hash and fails on a mismatch. `-- --hex <call> --chain <assetHub\|collectives\|people\|bulletin>` decodes any call. |
-| `npm run preflight` | all | Live state before submitting: runtimes unchanged, allowances empty, dispatcher deployed (with code hashes), names `Open` and unregistered, names owner mapped to its account, authorizer not yet registered, HRMP channels open, deadlines reachable. Lists the proxies and balances of every account involved. |
-| `npm run dry-run` | all | DryRunApi on live state: the batch with Root on Asset Hub, then each forwarded XCM on People and Bulletin; the Fellowship proposal with the Fellows origin, then its XCM on Asset Hub; the preimage with the WhitelistedCaller origin (fails with `CallIsNotWhitelisted` until the whitelist lands); and, with `-- --submitter <ss58>` or `params.submitter`, `note_preimage` + `Referenda.submit` to show the deposits. |
-| `npm run rehearse` | all (forked) | Forks Asset Hub, People, Bulletin and Collectives with Chopsticks, enacts both referenda through the scheduler with their real origins, delivers the XCMs and runs the post-enactment checks. Voting is not simulated. `-- --port-base <n>` (default 8100), `-- --keep`. |
-| `npm run verify` | Asset Hub, People, Bulletin | After enactment: live state against `params.json`, plus allowance used, names registered and Bulletin budget, for the periodic reports. |
+| `npm run preflight` | all | Live state before publication: runtimes unchanged, allowances empty, dispatcher deployed (with code hashes), names `Open` and unregistered, names owner mapped to its account, authorizer not yet registered, HRMP channels open, deadlines reachable. Lists the proxies and balances of every account involved. |
+| `npm run dry-run` | all | `DryRunApi` on live state: the batch with Root on Asset Hub, then each forwarded XCM on People and Bulletin; the Fellowship proposal with the Fellows origin, then its XCM on Asset Hub; the preimage with the WhitelistedCaller origin, expected to fail with `CallIsNotWhitelisted` until the whitelist lands; and, with `-- --submitter <ss58>` or `params.submitter`, `note_preimage` + `Referenda.submit` to show the deposits. |
+| `npm run rehearse` | all, on a local fork | Forks Asset Hub, People, Bulletin and Collectives with Chopsticks, enacts both referenda through the scheduler with their real origins, delivers the XCMs and runs the post-enactment checks. Voting is not simulated. `-- --port-base <n>` (default 8100), `-- --keep`. |
+| `npm run verify` | Asset Hub, People, Bulletin | After enactment: live state against `params.json`, with allowance used, names registered and Bulletin budget, for periodic reports. |
+| `npm run bundle` | none | Assembles the release assets into `dist/<proposal>/`; refuses unless `calls.json` re-encodes and every report passed. |
+| `npm run check` | all | `encode --check`, `decode`, `preflight` and `dry-run` in one go. |
 
-Every command takes `-- --proposal <dir>` (default `proposals/app-onboarding`).
+Every command takes `-- --proposal <dir>` (default `proposals/app-onboarding`). Reports go to
+`proposals/<name>/reports/`.
 
-## Submitting
+## Preparing a release
 
-1. Pin the dates: set `enactAt` and `bulletin.validUntil` to `null`, then `npm run pin && npm run encode`. `enactAt`
-   must leave the Fellowship 8 days (7-day decision plus one day margin) and the whitelist 24 hours.
-   `calls.json` records both deadlines as relay blocks. Pinning changes both hashes, so pin once and publish.
-2. `npm run check` and `npm run rehearse`; commit every generated file.
-3. Publish `BREAKDOWN.md`, `DRY_RUN.md` and `REHEARSAL.md` with the two hashes on the forum.
-4. Collectives: a sponsoring Fellow signs `fellowship.submit` from `calls.json` and places its decision deposit.
-5. Asset Hub: the submitter signs `Utility.batch_all([submission.notePreimage, submission.referendaSubmit])`, then
-   `Referenda.place_decision_deposit(<index>)` (10,000 DOT on the Whitelisted Caller track). Read the index from the
-   `Referenda.Submitted` event.
-6. Before `fellowshipSubmitBy` and `whitelistLandedBy`, `npm run preflight` reports whether the call is whitelisted
-   and the preimage noted.
-7. After `enactAt`, `npm run verify` and commit `STATE.md`.
+1. Pin the dates: set `enactAt` and `bulletin.validUntil` to `null`, then `npm run pin && npm run encode && npm run decode`.
+   Pinning changes both hashes, so pin once, open a pull request, and tag the merge commit.
+2. Tag it: `git tag <proposal>/v1-rc1 && git push origin <proposal>/v1-rc1`.
 
 If the whitelist misses `enactAt`, the referendum enacts without effect. The whitelist is keyed by the inner call
-hash, so only the Asset Hub referendum is resubmitted with a new `enactAt`; its preimage does not change.
+hash, so only the Asset Hub referendum needs a new `enactAt`; its preimage does not change.
 
 ## When a runtime upgrades
 
-`npm run preflight` fails once a live runtime no longer matches `calls.json`. Refresh the metadata and re-encode:
+`npm run preflight` and the daily `dry-run` fail once a live runtime no longer matches `calls.json`. Refresh the
+metadata and re-encode:
 
 ```sh
 npm run papi:update   # fetch the live metadata into .papi/ and regenerate the descriptors
 npm run encode        # the hashes change if the call encoding did
+npm run decode
 ```
+
+Offline tests skip proposals encoded for older runtimes, since those can no longer be reproduced from newer metadata.
 
 ## Layout
 
 ```
 src/lib/        reusable modules
-  chains.ts       the five chains, typed descriptors, connections pinned to a finalized block
+  chains.ts       the five chains, typed descriptors, connections pinned to a finalized block, failover endpoints
   proposal.ts     params.json schema, validation, proposal paths
   package.ts      builds the governance package offline (calls.json)
   xcm.ts          XCM locations and the unpaid Transact message
@@ -108,9 +137,9 @@ src/lib/        reusable modules
   enacted.ts      post-enactment checks, shared by verify and rehearse
   events.ts       runtime event helpers
   chopsticks.ts   Chopsticks fork process and dev RPCs
-  report.ts       PASS/FAIL checks and their Markdown report
+  report.ts       expected-outcome checks, Markdown reports and JSON logs
   format.ts       hex, hashes, accounts, display
-  cli.ts          flag parsing and exit codes
+  cli.ts          flag parsing, report output and exit codes
 src/cli/        one file per command
 test/           offline tests (node:test)
 .papi/          committed runtime metadata; descriptors are generated from it
@@ -119,12 +148,10 @@ test/           offline tests (node:test)
 ## Development
 
 ```sh
-npm run lint        # Biome: lint + format check (npm run lint:fix to apply)
+npm run lint        # Biome lint and format check; warnings fail (npm run lint:fix to apply)
 npm run typecheck   # tsc, strict
 npm test
 ```
-
-CI runs all three on every pull request.
 
 To add a proposal, copy a proposal folder, edit `params.json` and run the commands with `-- --proposal <dir>`. A
 proposal with different calls needs its own builder next to `src/lib/package.ts`.
@@ -133,4 +160,4 @@ proposal with different calls needs its own builder next to `src/lib/package.ts`
 
 The dry runs execute the real runtimes on live state, one leg at a time. The rehearsal chains the legs on a fork,
 including the scheduler and XCM delivery, but Chopsticks does not run collators or relay inclusion, and the referenda
-are enacted directly rather than voted. Rehearsing on a zombie-bite fork is the stronger test.
+are enacted directly rather than voted on.

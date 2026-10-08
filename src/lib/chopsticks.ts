@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HexString, PolkadotClient } from "polkadot-api";
-import type { ChainKey } from "./chains.ts";
+import type { ChainKey, Endpoints } from "./chains.ts";
 
 const STARTUP_TIMEOUT_MS = 300_000;
 /** Printed by `chopsticks xcm` once every chain is up and connected. */
@@ -14,28 +14,28 @@ const READY_MARKER = "Connected parachains";
 
 export class Fork {
   /** Local WebSocket endpoint of each forked chain. */
-  readonly endpoints: Record<ChainKey, string>;
+  readonly endpoints: Endpoints;
   private readonly process: ChildProcess;
   private readonly dir: string;
 
-  private constructor(endpoints: Record<ChainKey, string>, process: ChildProcess, dir: string) {
+  private constructor(endpoints: Endpoints, process: ChildProcess, dir: string) {
     this.endpoints = endpoints;
     this.process = process;
     this.dir = dir;
   }
 
   /** Forks `keys` from `upstream` on consecutive ports from `portBase`, and resolves once they are connected. */
-  static async start(upstream: Record<ChainKey, string>, keys: readonly ChainKey[], portBase: number): Promise<Fork> {
-    const dir = mkdtempSync(join(tmpdir(), "pcf-governance-"));
+  static async start(upstream: Endpoints, keys: readonly ChainKey[], portBase: number): Promise<Fork> {
+    const dir = mkdtempSync(join(tmpdir(), "pcf-refs-"));
     const endpoints = { ...upstream };
     const configs = keys.map((key, i) => {
       const port = portBase + i;
       const file = join(dir, `${key}.yml`);
       writeFileSync(
         file,
-        `endpoint: ${upstream[key]}\nport: ${port}\nmock-signature-host: true\nruntime-log-level: 0\n`,
+        `endpoint: ${JSON.stringify(upstream[key])}\nport: ${port}\nmock-signature-host: true\nruntime-log-level: 0\n`,
       );
-      endpoints[key] = `ws://127.0.0.1:${port}`;
+      endpoints[key] = [`ws://127.0.0.1:${port}`];
       return file;
     });
     const bin = new URL("../../node_modules/.bin/chopsticks", import.meta.url).pathname;
