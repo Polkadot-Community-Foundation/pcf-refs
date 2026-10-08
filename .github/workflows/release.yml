@@ -53,6 +53,7 @@ jobs:
       - name: Dry run
         run: npm run --silent dry-run -- --proposal "$PROPOSAL" 2>&1 | tee "$PROPOSAL/reports/dry-run.log"
       - name: Rehearsal on a Chopsticks fork
+        timeout-minutes: 15
         run: npm run --silent rehearse -- --proposal "$PROPOSAL" 2>&1 | tee "$PROPOSAL/reports/rehearsal.log"
       - name: Bundle
         run: |

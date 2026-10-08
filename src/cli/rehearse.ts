@@ -15,6 +15,8 @@
  *   --port-base <n>   first local port (default 8100; four are used)
  *   --keep            leave the fork running afterwards
  */
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { Bytes } from "@polkadot-api/substrate-bindings";
 import type { HexString } from "polkadot-api";
 import { type Chain, type Chains, connect, stateOf } from "../lib/chains.ts";
@@ -41,7 +43,13 @@ main(async () => {
   const report = new Report();
 
   console.log("starting chopsticks (forking live state, takes a minute)…");
-  const fork = await Fork.start(p.endpoints, FORKED, Number(flags["port-base"]));
+  mkdirSync(proposal.reports, { recursive: true });
+  const fork = await Fork.start(
+    p.endpoints,
+    FORKED,
+    Number(flags["port-base"]),
+    join(proposal.reports, "chopsticks.log"),
+  );
   let chains: ForkedChains | undefined;
   let forkedAt: Record<string, unknown> = {};
   try {
