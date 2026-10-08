@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HexString, PolkadotClient } from "polkadot-api";
 import type { ChainKey, Endpoints } from "./chains.ts";
+import { withTimeout } from "./timeout.ts";
 
 const STARTUP_TIMEOUT_MS = 300_000;
 /** Printed by `chopsticks xcm` once every chain is up and connected. */
@@ -83,18 +84,25 @@ export class Fork {
   }
 }
 
-/** Chopsticks development RPCs on one forked chain. */
+/**
+ * Longest a single RPC to the fork may take. Building a block can fetch a lot of state from upstream, but a call that
+ * never returns must fail the rehearsal with a reason rather than hang it.
+ */
+const RPC_TIMEOUT_MS = 180_000;
+
+/** Chopsticks development RPCs on one forked chain, each bounded by a timeout. */
 export function devRpc(client: PolkadotClient) {
+  const request = <T>(method: string, params: unknown[]) =>
+    withTimeout(`${method} on the fork`, RPC_TIMEOUT_MS, client._request<T>(method, params));
   return {
     /** Builds one block, after any block Chopsticks is already building. */
-    newBlock: () => client._request("dev_newBlock", [{ count: 1 }]),
+    newBlock: () => request("dev_newBlock", [{ count: 1 }]),
     /**
      * Sets storage at the head, in Chopsticks' `{ Pallet: { Item: [[keys, value]] } }` form. A hex string value is
      * taken as already SCALE-encoded.
      */
-    setStorage: (values: Record<string, unknown>) => client._request("dev_setStorage", [values]),
+    setStorage: (values: Record<string, unknown>) => request("dev_setStorage", [values]),
     /** Hash of the head, or of block `number`. papi's own view of the head can trail blocks built with `newBlock`. */
-    blockHash: (number?: number) =>
-      client._request<HexString>("chain_getBlockHash", number === undefined ? [] : [number]),
+    blockHash: (number?: number) => request<HexString>("chain_getBlockHash", number === undefined ? [] : [number]),
   };
 }

@@ -8,6 +8,7 @@
 import { assetHub, bulletin, collectives, people, relay } from "@polkadot-api/descriptors";
 import { createClient, type HexString, type PolkadotClient, type TypedApi } from "polkadot-api";
 import { getWsProvider } from "polkadot-api/ws";
+import { withTimeout } from "./timeout.ts";
 
 export const descriptors = { relay, assetHub, people, bulletin, collectives } as const;
 export type ChainKey = keyof typeof descriptors;
@@ -29,6 +30,9 @@ export const PARA = { assetHub: 1000, collectives: 1001, people: 1004, bulletin:
 
 export const chainOfPara = (para: number): ChainKey | undefined =>
   (Object.keys(PARA) as (keyof typeof PARA)[]).find((k) => PARA[k] === para);
+
+/** Longest a connection may take to report its finalized block and runtime. */
+const CONNECT_TIMEOUT_MS = 120_000;
 
 /** Blocks per day at 6 s blocks: the relay chain, Asset Hub referenda (relay-block based) and Bulletin. */
 export const BLOCKS_PER_DAY = 14_400;
@@ -52,8 +56,18 @@ export async function connect<K extends ChainKey>(endpoints: Endpoints, keys: re
     keys.map(async (key) => {
       const client = createClient(getWsProvider(endpoints[key]));
       const api = client.getTypedApi(descriptors[key]) as TypedApi<Descriptors[K]>;
-      const finalized = await client.getFinalizedBlock();
-      const { spec_version } = await (api as TypedApi<Descriptors["assetHub"]>).constants.System.Version();
+      const what = `connecting to ${CHAIN_NAMES[key]} (${endpoints[key].join(", ")})`;
+      const [finalized, { spec_version }] = await withTimeout(
+        what,
+        CONNECT_TIMEOUT_MS,
+        Promise.all([
+          client.getFinalizedBlock(),
+          (api as TypedApi<Descriptors["assetHub"]>).constants.System.Version(),
+        ]),
+      ).catch((error: unknown) => {
+        client.destroy();
+        throw error;
+      });
       const chain: Chain<K> = { key, client, api, at: finalized.hash, block: finalized.number, spec: spec_version };
       return [key, chain] as const;
     }),
