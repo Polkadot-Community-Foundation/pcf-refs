@@ -1,0 +1,80 @@
+name: release
+
+# On a tag <proposal>/v<n> (or v<n>-rc<m> for a pre-release) pointing at main: re-runs every check, and publishes
+# the call data, the reports and the logs as a GitHub release. Nothing is signed or submitted on chain.
+
+on:
+  push:
+    tags: ["*/v*"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Tag must point at main and name a proposal
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag is not on main"; exit 1; }
+          name="${GITHUB_REF_NAME%%/*}"
+          [[ "$name" =~ ^[a-z0-9-]+$ && -f "proposals/$name/params.json" ]] || { echo "no proposal for tag $GITHUB_REF_NAME"; exit 1; }
+          echo "PROPOSAL_NAME=$name" >> "$GITHUB_ENV"
+          echo "PROPOSAL=proposals/$name" >> "$GITHUB_ENV"
+          echo "ASSET_PREFIX=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_ENV"
+          mkdir -p "proposals/$name/reports"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: Reproduce calls.json offline
+        run: npm run --silent encode -- --proposal "$PROPOSAL" --check 2>&1 | tee "$PROPOSAL/reports/encode.log"
+      - name: Decode, and check the committed breakdown is current
+        run: |
+          npm run --silent decode -- --proposal "$PROPOSAL" 2>&1 | tee "$PROPOSAL/reports/decode.log"
+          git diff --exit-code -- "$PROPOSAL/BREAKDOWN.md"
+      - name: Preflight
+        run: npm run --silent preflight -- --proposal "$PROPOSAL" 2>&1 | tee "$PROPOSAL/reports/preflight.log"
+      - name: Dry run
+        run: npm run --silent dry-run -- --proposal "$PROPOSAL" 2>&1 | tee "$PROPOSAL/reports/dry-run.log"
+      - name: Rehearsal on a Chopsticks fork
+        timeout-minutes: 15
+        run: npm run --silent rehearse -- --proposal "$PROPOSAL" 2>&1 | tee "$PROPOSAL/reports/rehearsal.log"
+      - name: Bundle
+        run: |
+          npm run --silent bundle -- --proposal "$PROPOSAL" --tag "$GITHUB_REF_NAME"
+          tar -czf "dist/$ASSET_PREFIX.tar.gz" -C dist "$PROPOSAL_NAME"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: release-${{ env.ASSET_PREFIX }}
+          path: |
+            ${{ env.PROPOSAL }}/reports/
+            dist/
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          b="dist/$PROPOSAL_NAME"
+          prerelease=()
+          [[ "$GITHUB_REF_NAME" == *-rc* ]] && prerelease=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" --verify-tag "${prerelease[@]}" \
+            --title "$(head -1 "$b/RELEASE_NOTES.md" | sed 's/^# //')" \
+            --notes-file "$b/RELEASE_NOTES.md" \
+            "dist/$ASSET_PREFIX.tar.gz" "$b/SHA256SUMS" "$b/calls.json" "$b"/*.hex \
+            "$b/reports/dry-run.md" "$b/reports/rehearsal.md" "$b/reports/preflight.md"

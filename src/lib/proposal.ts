@@ -5,12 +5,12 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Address } from "viem";
-import type { ChainKey } from "./chains.ts";
+import { descriptors, type Endpoints } from "./chains.ts";
 import { toJson, toSs58 } from "./format.ts";
 
 export interface Params {
   title: string;
-  endpoints: Record<ChainKey, string>;
+  endpoints: Endpoints;
   /** Account granted the attestation allowance on Asset Hub and People. */
   attester: string;
   /** Allowance granted on each chain. */
@@ -58,6 +58,8 @@ export interface Proposal {
   params: Params;
   /** Path of a file in the proposal folder. */
   path(name: string): string;
+  /** Folder for the reports and logs of the online commands; generated, not committed. */
+  reports: string;
 }
 
 export const DEFAULT_PROPOSAL = "proposals/app-onboarding";
@@ -68,7 +70,7 @@ export function loadProposal(dir: string = DEFAULT_PROPOSAL): Proposal {
   if (!existsSync(file)) throw new Error(`no params.json in ${root}`);
   const params = JSON.parse(readFileSync(file, "utf8")) as Params;
   validate(params);
-  return { dir: root, params, path: (name) => join(root, name) };
+  return { dir: root, params, path: (name) => join(root, name), reports: join(root, "reports") };
 }
 
 export function saveParams(proposal: Proposal): void {
@@ -100,6 +102,12 @@ function validate(p: Params): void {
     "dotns.registrar": p.dotns.registrar,
   })) {
     if (!H160.test(value)) fail(`${key} must be a 0x-prefixed H160`);
+  }
+  for (const chain of Object.keys(descriptors) as (keyof Endpoints)[]) {
+    const urls = p.endpoints[chain];
+    if (!Array.isArray(urls) || urls.length === 0 || !urls.every((u) => /^wss?:\/\//.test(u))) {
+      fail(`endpoints.${chain} must be a non-empty list of ws:// or wss:// URLs`);
+    }
   }
   toSs58(p.attester);
   toSs58(p.bulletin.authorizer);

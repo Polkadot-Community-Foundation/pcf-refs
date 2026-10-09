@@ -2,65 +2,79 @@
  * Runs a Chopsticks fork of several chains connected over XCM, and wraps the `dev_*` RPCs the rehearsal uses.
  */
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HexString, PolkadotClient } from "polkadot-api";
-import type { ChainKey } from "./chains.ts";
+import type { ChainKey, Endpoints } from "./chains.ts";
+import { withTimeout } from "./timeout.ts";
 
 const STARTUP_TIMEOUT_MS = 300_000;
 /** Printed by `chopsticks xcm` once every chain is up and connected. */
 const READY_MARKER = "Connected parachains";
+/** Characters of Chopsticks output kept in memory. */
+const LOG_TAIL = 4_000;
 
 export class Fork {
   /** Local WebSocket endpoint of each forked chain. */
-  readonly endpoints: Record<ChainKey, string>;
+  readonly endpoints: Endpoints;
   private readonly process: ChildProcess;
   private readonly dir: string;
 
-  private constructor(endpoints: Record<ChainKey, string>, process: ChildProcess, dir: string) {
+  private constructor(endpoints: Endpoints, process: ChildProcess, dir: string) {
     this.endpoints = endpoints;
     this.process = process;
     this.dir = dir;
   }
 
-  /** Forks `keys` from `upstream` on consecutive ports from `portBase`, and resolves once they are connected. */
-  static async start(upstream: Record<ChainKey, string>, keys: readonly ChainKey[], portBase: number): Promise<Fork> {
-    const dir = mkdtempSync(join(tmpdir(), "pcf-governance-"));
+  /**
+   * Forks `keys` from `upstream` on consecutive ports from `portBase`, and resolves once they are connected. Chopsticks'
+   * output is appended to `logFile`.
+   */
+  static async start(upstream: Endpoints, keys: readonly ChainKey[], portBase: number, logFile: string): Promise<Fork> {
+    const dir = mkdtempSync(join(tmpdir(), "pcf-refs-"));
     const endpoints = { ...upstream };
     const configs = keys.map((key, i) => {
       const port = portBase + i;
       const file = join(dir, `${key}.yml`);
       writeFileSync(
         file,
-        `endpoint: ${upstream[key]}\nport: ${port}\nmock-signature-host: true\nruntime-log-level: 0\n`,
+        `endpoint: ${JSON.stringify(upstream[key])}\nport: ${port}\nmock-signature-host: true\nruntime-log-level: 0\n`,
       );
-      endpoints[key] = `ws://127.0.0.1:${port}`;
+      endpoints[key] = [`ws://127.0.0.1:${port}`];
       return file;
     });
     const bin = new URL("../../node_modules/.bin/chopsticks", import.meta.url).pathname;
     const child = spawn(bin, ["xcm", ...configs.flatMap((f) => ["-p", f])], { stdio: ["ignore", "pipe", "pipe"] });
+    const log = createWriteStream(logFile, { flags: "a" });
+    child.stdout.pipe(log);
+    child.stderr.pipe(log);
 
-    let log = "";
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error(`chopsticks did not start:\n${log.slice(-2000)}`)),
-        STARTUP_TIMEOUT_MS,
-      );
+    // Only a short tail is kept in memory: enough to spot the marker across chunk boundaries and to report errors.
+    let tail = "";
+    const ready = new Promise<void>((resolve, reject) => {
+      const fail = (reason: string) => {
+        child.kill();
+        reject(new Error(`chopsticks ${reason}; see ${logFile}:\n${tail.slice(-LOG_TAIL)}`));
+      };
+      const timer = setTimeout(() => fail(`did not connect within ${STARTUP_TIMEOUT_MS / 1000} s`), STARTUP_TIMEOUT_MS);
       const onData = (chunk: Buffer) => {
-        log += chunk;
-        if (log.includes(READY_MARKER)) {
+        tail = (tail + chunk.toString()).slice(-LOG_TAIL);
+        if (tail.includes(READY_MARKER)) {
           clearTimeout(timer);
+          child.stdout.off("data", onData);
+          child.stderr.off("data", onData);
           resolve();
         }
       };
       child.stdout.on("data", onData);
       child.stderr.on("data", onData);
-      child.on("exit", (code) => {
+      child.once("exit", (code) => {
         clearTimeout(timer);
-        reject(new Error(`chopsticks exited with ${code}:\n${log.slice(-2000)}`));
+        reject(new Error(`chopsticks exited with ${code}; see ${logFile}:\n${tail.slice(-LOG_TAIL)}`));
       });
     });
+    await ready;
     return new Fork(endpoints, child, dir);
   }
 
@@ -70,18 +84,25 @@ export class Fork {
   }
 }
 
-/** Chopsticks development RPCs on one forked chain. */
+/**
+ * Longest a single RPC to the fork may take. Building a block can fetch a lot of state from upstream, but a call that
+ * never returns must fail the rehearsal with a reason rather than hang it.
+ */
+const RPC_TIMEOUT_MS = 180_000;
+
+/** Chopsticks development RPCs on one forked chain, each bounded by a timeout. */
 export function devRpc(client: PolkadotClient) {
+  const request = <T>(method: string, params: unknown[]) =>
+    withTimeout(`${method} on the fork`, RPC_TIMEOUT_MS, client._request<T>(method, params));
   return {
     /** Builds one block, after any block Chopsticks is already building. */
-    newBlock: () => client._request("dev_newBlock", [{ count: 1 }]),
+    newBlock: () => request("dev_newBlock", [{ count: 1 }]),
     /**
      * Sets storage at the head, in Chopsticks' `{ Pallet: { Item: [[keys, value]] } }` form. A hex string value is
      * taken as already SCALE-encoded.
      */
-    setStorage: (values: Record<string, unknown>) => client._request("dev_setStorage", [values]),
+    setStorage: (values: Record<string, unknown>) => request("dev_setStorage", [values]),
     /** Hash of the head, or of block `number`. papi's own view of the head can trail blocks built with `newBlock`. */
-    blockHash: (number?: number) =>
-      client._request<HexString>("chain_getBlockHash", number === undefined ? [] : [number]),
+    blockHash: (number?: number) => request<HexString>("chain_getBlockHash", number === undefined ? [] : [number]),
   };
 }

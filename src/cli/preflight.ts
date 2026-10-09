@@ -1,5 +1,5 @@
 /**
- * `npm run preflight`: read-only checks of live state before publishing or submitting. Writes PREFLIGHT.md.
+ * `npm run preflight`: read-only checks of live state before publishing. Writes reports/preflight.{md,json}.
  *
  * - the live runtimes are the ones calls.json was encoded for
  * - the targets are empty: allowances, dispatcher, Bulletin authorizer; the names are Open and unregistered
@@ -10,8 +10,8 @@
  * It also lists the proxies and balances of every account involved, for the forum post.
  */
 import type { SS58String } from "polkadot-api";
-import { BLOCKS_PER_DAY, type Chain, connect, PARA } from "../lib/chains.ts";
-import { main, parseCommand } from "../lib/cli.ts";
+import { BLOCKS_PER_DAY, type Chain, connect, describeState, PARA, stateOf } from "../lib/chains.ts";
+import { finish, main, parseCommand } from "../lib/cli.ts";
 import {
   CONTROLLER_ABI,
   codeHashOf,
@@ -36,11 +36,6 @@ main(async () => {
   const daysFromNow = (block: number, now: number) => `${((block - now) / BLOCKS_PER_DAY).toFixed(1)} days from now`;
 
   try {
-    report.info(
-      "state read at",
-      `relay #${relay.block}, Asset Hub #${ah.block}, People #${people.block}, Bulletin #${bulletin.block}`,
-    );
-
     // Runtimes: the published bytes are only valid for these.
     for (const key of ["assetHub", "people", "bulletin", "collectives"] as const) {
       const live = chains[key].spec;
@@ -171,13 +166,14 @@ main(async () => {
     chains.close();
   }
 
-  report.write(
-    proposal.path("PREFLIGHT.md"),
-    `Preflight: ${p.title}`,
-    "Read-only checks by `src/cli/preflight.ts` against live Polkadot state.",
-  );
-  console.log(`\n${report.failed ? "PREFLIGHT FAILED" : "preflight green"}; wrote ${proposal.path("PREFLIGHT.md")}`);
-  return report.failed ? 1 : 0;
+  return finish(report, proposal, "preflight", {
+    command: "preflight",
+    title: `Preflight: ${p.title}`,
+    intro: [
+      `Read-only checks by \`src/cli/preflight.ts\` against live Polkadot state. State: ${describeState(chains)}.`,
+    ],
+    state: stateOf(chains),
+  });
 });
 
 type TrackInfo = [id: number, track: { name: string; decision_deposit: bigint }];

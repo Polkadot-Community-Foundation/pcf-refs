@@ -1,0 +1,77 @@
+name: dry-run
+
+# Dry-runs a proposal against live Polkadot and a Chopsticks fork, and uploads the reports and logs.
+# Nothing is signed or submitted. Runs daily so a runtime upgrade that invalidates the call data shows up.
+
+on:
+  workflow_dispatch:
+    inputs:
+      proposal:
+        description: Proposal folder under proposals/
+        default: app-onboarding
+  schedule:
+    - cron: "0 6 * * *"
+  pull_request:
+    paths: ["proposals/**", "src/**", ".papi/**", "package.json", "package-lock.json"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dry-run-${{ github.ref }}-${{ inputs.proposal || 'app-onboarding' }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PROPOSAL_NAME: ${{ inputs.proposal || 'app-onboarding' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Select proposal
+        run: |
+          [[ "$PROPOSAL_NAME" =~ ^[a-z0-9-]+$ && -f "proposals/$PROPOSAL_NAME/params.json" ]] || { echo "unknown proposal: $PROPOSAL_NAME"; exit 1; }
+          echo "PROPOSAL=proposals/$PROPOSAL_NAME" >> "$GITHUB_ENV"
+          mkdir -p "proposals/$PROPOSAL_NAME/reports"
+      - name: Reproduce calls.json offline
+        run: npm run --silent encode -- --proposal "$PROPOSAL" --check 2>&1 | tee "$PROPOSAL/reports/encode.log"
+      - name: Decode, and check the committed breakdown is current
+        if: ${{ !cancelled() }}
+        run: |
+          npm run --silent decode -- --proposal "$PROPOSAL" 2>&1 | tee "$PROPOSAL/reports/decode.log"
+          git diff --exit-code -- "$PROPOSAL/BREAKDOWN.md"
+      - name: Preflight
+        if: ${{ !cancelled() }}
+        run: npm run --silent preflight -- --proposal "$PROPOSAL" 2>&1 | tee "$PROPOSAL/reports/preflight.log"
+      - name: Dry run
+        if: ${{ !cancelled() }}
+        run: npm run --silent dry-run -- --proposal "$PROPOSAL" 2>&1 | tee "$PROPOSAL/reports/dry-run.log"
+      - name: Rehearsal on a Chopsticks fork
+        timeout-minutes: 15
+        if: ${{ !cancelled() }}
+        run: npm run --silent rehearse -- --proposal "$PROPOSAL" 2>&1 | tee "$PROPOSAL/reports/rehearsal.log"
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          for f in "$PROPOSAL"/reports/*.json; do
+            jq -r '"| \(.command) | \(.outcome | ascii_upcase) | \(.counts.pass) | \(.counts.fail) |"' "$f"
+          done | { printf '| Report | Outcome | Passed | Failed |\n|---|---|---|---|\n'; cat; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: dry-run-${{ env.PROPOSAL_NAME }}
+          path: |
+            ${{ env.PROPOSAL }}/reports/
+            ${{ env.PROPOSAL }}/BREAKDOWN.md
