@@ -46,10 +46,10 @@
     "transactions": 5000,
     "bytes": "10737418240",
     "validDays": 365,
-    "validUntil": 7396458,
+    "validUntil": 7418284,
     "feeless": true
   },
   "enactInDays": 14,
-  "enactAt": 33532322,
+  "enactAt": 33554413,
   "submitter": null
 }
