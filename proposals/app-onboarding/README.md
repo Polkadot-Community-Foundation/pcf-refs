@@ -10,7 +10,8 @@ its decoding and the checks that back every statement below are in this folder.
 | Route | Fellowship whitelist on Collectives, then a Whitelisted Caller referendum on Asset Hub |
 | Inner call hash | `0x90640a174e1d62b5645f31cb053d562e95a63881fd1e0f9197edbbcf83e21fad` (547 bytes) |
 | Referendum preimage hash | `0x294b20f9659cfb82c624b9391106bb3533cad0921e595b70389b12ab68e8e54a` (549 bytes) |
-| Status | Version 2, under discussion on the [forum](https://forum.polkadot.network/t/final-steps-for-dotdao-to-enable-user-onboarding-via-polkadot-app/18937); not released yet |
+| Status | Version 2, under discussion on the [forum](https://forum.polkadot.network/t/final-steps-for-dotdao-to-enable-user-onboarding-via-polkadot-app/18937); released as [`app-onboarding/v2-rc1`](https://github.com/Polkadot-Community-Foundation/pcf-refs/releases/tag/app-onboarding/v2-rc1) |
+| Enactment | relay block 33525098, about 2026-10-21 07:00 UTC (09:00 CEST) |
 
 Files: [`params.json`](params.json) (inputs), [`calls.json`](calls.json) (every encoded call, both hashes, the
 deadlines), [`BREAKDOWN.md`](BREAKDOWN.md) (the call data decoded call by call against live metadata). How the
@@ -149,8 +150,8 @@ From [`params.json`](params.json):
 | `dotns.release` | [v1.0.0-pcf.1](https://github.com/Polkadot-Community-Foundation/dotns/releases/tag/v1.0.0-pcf.1) | dotNS release the contract addresses come from |
 | `grantWeight` | ref time `10000000000`, proof size `1000000` | weight limit of the `grantNames` call |
 | `grantStorageDepositLimit` | `10000000000` planck | storage deposit limit of the `grantNames` call; Root is not charged, but 0 reverts the call |
-| `enactInDays` | `10` | delay `npm run pin` uses to set `enactAt` |
-| `enactAt` | `33554413` | relay block the Asset Hub referendum enacts at; provisional, see [Governance route](#governance-route) |
+| `enactInDays` | `9` | delay `npm run pin` uses to set `enactAt` when it is `null` |
+| `enactAt` | `33525098` | relay block the Asset Hub referendum enacts at, about 2026-10-21 07:00 UTC |
 
 ## Hashes
 
@@ -175,18 +176,17 @@ Neither hash depends on the enactment block: only `Referenda.submit` and the dea
 
 The fixed enactment means the Asset Hub referendum does not enact before `enactAt`, however early it is approved. The
 deadlines below leave the Fellowship time to whitelist the call before then. They assume both referenda decide within
-7 days of their decision deposits, and keep a 2-day margin between the whitelist and enactment. `calls.json` records
+7 days of their decision deposits, and keep a 1-day margin between the whitelist and enactment. `calls.json` records
 them as relay blocks (14,400 per day).
 
-The relay blocks below come from the `enactAt` pinned today, which is provisional. It is re-pinned when the release
-is cut, which changes `Referenda.submit` and the deadlines but not the inner call or the preimage. Each release's
-notes give the binding relay blocks with estimated UTC dates.
+Relay blocks are binding; the dates are estimates at 6 seconds per block, computed from the relay chain on
+2026-10-12. Moving `enactAt` changes `Referenda.submit` and the deadlines, not the inner call or the preimage.
 
-| Deadline | Rule | Relay block (current provisional pin) |
-|---|---|---|
-| Fellowship referendum submitted, with its decision deposit, by | `enactAt` − 9 days | 33424813 |
-| Whitelist on Asset Hub by (cutoff) | `enactAt` − 2 days | 33525613 |
-| Asset Hub referendum enacts at | `enactAt` at the earliest (later if the referendum is approved after it); set 10 days out by `npm run pin` | 33554413 |
+| Deadline | Rule | Relay block | About (UTC) |
+|---|---|---|---|
+| Fellowship referendum submitted, with its decision deposit, by | `enactAt` − 8 days | 33409898 | 2026-10-13 07:00 |
+| Whitelist on Asset Hub by (cutoff) | `enactAt` − 1 day | 33510698 | 2026-10-20 07:00 |
+| Asset Hub referendum enacts at | `enactAt` at the earliest (later if the referendum is approved after it) | 33525098 | 2026-10-21 07:00 |
 
 Under the same 7-day assumption, the Asset Hub referendum must also be submitted, with its decision deposit, early
 enough to be decided before `enactAt`.
@@ -271,7 +271,7 @@ allowances and names are used after enactment.
 | Version | Calls | Inner call hash | Preimage hash | Release |
 |---|---|---|---|---|
 | v1 | 5: the four above, plus a Bulletin `TransactionStorage.add_authorizer` sent by XCM | `0xb47e722c2c665db41e610308097c395f2be4361c861443372c15579a4f28b8ad` (617 bytes) | `0x6d5e2de1d74047484016347ffe83e9d47a89939a6f699ed82934a4826875a989` (619 bytes) | [`app-onboarding/v1-rc1`](https://github.com/Polkadot-Community-Foundation/pcf-refs/releases/tag/app-onboarding/v1-rc1) pre-release, superseded |
-| v2 | 4: the calls above | `0x90640a174e1d62b5645f31cb053d562e95a63881fd1e0f9197edbbcf83e21fad` (547 bytes) | `0x294b20f9659cfb82c624b9391106bb3533cad0921e595b70389b12ab68e8e54a` (549 bytes) | not released yet |
+| v2 | 4: the calls above | `0x90640a174e1d62b5645f31cb053d562e95a63881fd1e0f9197edbbcf83e21fad` (547 bytes) | `0x294b20f9659cfb82c624b9391106bb3533cad0921e595b70389b12ab68e8e54a` (549 bytes) | [`app-onboarding/v2-rc1`](https://github.com/Polkadot-Community-Foundation/pcf-refs/releases/tag/app-onboarding/v2-rc1) pre-release |
 
 Version 2 drops the Bulletin storage authorizer, for the reason given in [What and why](#what-and-why). Its first four
 calls are byte for byte those of version 1. Discussion:

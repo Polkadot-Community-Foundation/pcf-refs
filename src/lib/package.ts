@@ -22,7 +22,7 @@ import { siblingLocation, unpaidTransact } from "./xcm.ts";
 /** Both referenda are assumed to decide within 7 days of their decision deposits; the rest is margin for the whitelist. */
 const DECISION_DAYS = 7;
 /** The whitelist must be on Asset Hub this long before the referendum enacts. */
-const WHITELIST_LEAD_DAYS = 2;
+const WHITELIST_LEAD_DAYS = 1;
 const FELLOWSHIP_LEAD_DAYS = DECISION_DAYS + WHITELIST_LEAD_DAYS;
 /** Enactment delay of the Fellowship referendum, in Collectives blocks. */
 const FELLOWSHIP_ENACTMENT_AFTER = 10;

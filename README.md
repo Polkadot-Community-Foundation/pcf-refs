@@ -20,7 +20,7 @@ call data and hashes published here.
 
 | Proposal | Summary | Chains changed | Governance route | Status | Releases |
 |---|---|---|---|---|---|
-| [`app-onboarding`](proposals/app-onboarding/README.md) | Attestation allowances, the dotNS dispatcher and three app names, so Polkadot App users can complete onboarding | Asset Hub, People | Fellowship whitelist, then Whitelisted Caller | Version 2 under discussion on the [forum](https://forum.polkadot.network/t/final-steps-for-dotdao-to-enable-user-onboarding-via-polkadot-app/18937), not released | [`app-onboarding/v1-rc1`](https://github.com/Polkadot-Community-Foundation/pcf-refs/releases/tag/app-onboarding/v1-rc1) (earlier five-call version, superseded) |
+| [`app-onboarding`](proposals/app-onboarding/README.md) | Attestation allowances, the dotNS dispatcher and three app names, so Polkadot App users can complete onboarding | Asset Hub, People | Fellowship whitelist, then Whitelisted Caller | Version 2 under discussion on the [forum](https://forum.polkadot.network/t/final-steps-for-dotdao-to-enable-user-onboarding-via-polkadot-app/18937) | [`app-onboarding/v2-rc1`](https://github.com/Polkadot-Community-Foundation/pcf-refs/releases/tag/app-onboarding/v2-rc1) (current); [`app-onboarding/v1-rc1`](https://github.com/Polkadot-Community-Foundation/pcf-refs/releases/tag/app-onboarding/v1-rc1) (earlier five-call version, superseded) |
 
 ## Verify a proposal
 
