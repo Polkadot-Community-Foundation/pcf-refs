@@ -12,22 +12,26 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import type { HexString } from "polkadot-api";
 import { main, parseCommand } from "../lib/cli.ts";
 import { toJson } from "../lib/format.ts";
-import { buildPackage, readPackage } from "../lib/package.ts";
+import { buildPackage, describeRuntimes, type GovernancePackage, readPackage } from "../lib/package.ts";
 import { requirePinned } from "../lib/proposal.ts";
 import type { ReportLog } from "../lib/report.ts";
 
 /** Reports a release must carry, all with outcome pass. */
 const REQUIRED_REPORTS = ["preflight", "dry-run", "rehearsal"] as const;
 
-/** Call data published as separate hex files, for pasting into a signer. */
+/** Repository the release notes tell reviewers to clone. */
+const REPOSITORY = "https://github.com/Polkadot-Community-Foundation/pcf-refs";
+
+/** Call data published as separate hex files, for pasting into a signer: file, calls.json field, content. */
 const CALL_DATA = [
-  ["preimage.hex", "Referendum preimage: `Whitelist.dispatch_whitelisted_call_with_preimage(batch)`"],
-  ["inner-call.hex", "Inner call (`Utility.batch_all`), whose hash the Fellowship whitelists"],
-  ["note-preimage.hex", "`Preimage.note_preimage(preimage)` on Asset Hub"],
-  ["referenda-submit.hex", "`Referenda.submit` on Asset Hub, Whitelisted Caller track"],
-  ["fellowship-submit.hex", "`FellowshipReferenda.submit` on Collectives, Fellows track"],
+  ["preimage.hex", "refPreimage", "Referendum preimage: `Whitelist.dispatch_whitelisted_call_with_preimage(batch)`"],
+  ["inner-call.hex", "rootBatch", "Inner call (`Utility.batch_all`), whose hash the Fellowship whitelists"],
+  ["note-preimage.hex", "submission.notePreimage", "`Preimage.note_preimage(preimage)` on Asset Hub"],
+  ["referenda-submit.hex", "submission.referendaSubmit", "`Referenda.submit` on Asset Hub, Whitelisted Caller track"],
+  ["fellowship-submit.hex", "fellowship.submit", "`FellowshipReferenda.submit` on Collectives, Fellows track"],
 ] as const;
 
 main(async () => {
@@ -54,19 +58,12 @@ main(async () => {
   rmSync(out, { recursive: true, force: true });
   mkdirSync(join(out, "reports"), { recursive: true });
   for (const file of ["params.json", "calls.json", "BREAKDOWN.md"]) copyFileSync(proposal.path(file), join(out, file));
-  const callData: Record<(typeof CALL_DATA)[number][0], string> = {
-    "preimage.hex": pkg.refPreimage,
-    "inner-call.hex": pkg.rootBatch,
-    "note-preimage.hex": pkg.submission.notePreimage,
-    "referenda-submit.hex": pkg.submission.referendaSubmit,
-    "fellowship-submit.hex": pkg.fellowship.submit,
-  };
-  for (const [file, hex] of Object.entries(callData)) writeFileSync(join(out, file), `${hex}\n`);
+  for (const [file, field] of CALL_DATA) writeFileSync(join(out, file), `${fieldOf(pkg, field)}\n`);
   for (const file of readdirSync(proposal.reports))
     copyFileSync(join(proposal.reports, file), join(out, "reports", file));
 
   const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  writeFileSync(join(out, "RELEASE_NOTES.md"), releaseNotes(flags.tag, commit, pkg, logs));
+  writeFileSync(join(out, "RELEASE_NOTES.md"), releaseNotes(flags.tag, name, commit, pkg, logs));
   writeFileSync(join(out, "SHA256SUMS"), checksums(out));
   console.log(`bundled ${name} (${flags.tag}) into ${out}`);
   return 0;
@@ -74,14 +71,19 @@ main(async () => {
 
 function releaseNotes(
   tag: string,
+  name: string,
   commit: string,
   pkg: ReturnType<typeof readPackage>,
   logs: (readonly [string, ReportLog])[],
 ): string {
-  const r = pkg.runtimes;
   const d = pkg.deadlines;
+  const dir = `proposals/${name}`;
+  const preflight = logs.find(([report]) => report === "preflight")?.[1].state;
+  const utc = preflight?.deadlinesUtc as Record<keyof typeof d, string> | undefined;
+  const estimatedFrom = (preflight?.relay as { block?: number } | undefined)?.block;
   const outcomes = logs.map(([report, log]) => {
     const blocks = Object.entries(log.state)
+      .filter(([, s]) => typeof (s as { block?: unknown }).block === "number")
       .map(([chain, s]) => `${chain} #${(s as { block: number }).block}`)
       .join(", ");
     return `| ${report} | ${log.outcome.toUpperCase()} | ${log.counts.pass} | ${log.counts.fail} | ${blocks} |`;
@@ -100,15 +102,17 @@ function releaseNotes(
     `| Inner call, whitelisted by the Fellowship | \`${pkg.rootBatchHash}\` | ${pkg.rootBatchLen} bytes |`,
     `| Referendum preimage, looked up by the Whitelisted Caller referendum | \`${pkg.refPreimageHash}\` | ${pkg.refPreimageLen} bytes |`,
     "",
-    `Encoded for runtimes Asset Hub ${r.assetHub}, People ${r.people}, Bulletin ${r.bulletin}, Collectives ${r.collectives}.`,
+    `Encoded for runtimes ${describeRuntimes(pkg.runtimes)}.`,
     "",
-    "## Deadlines (relay blocks)",
+    "## Deadlines",
     "",
-    "| | Block |",
-    "|---|---|",
-    `| Fellowship referendum submitted by | ${d.fellowshipSubmitBy} |`,
-    `| Whitelist on Asset Hub by | ${d.whitelistLandedBy} |`,
-    `| Whitelisted Caller referendum enacts at | ${d.enactAt} |`,
+    `Relay blocks are binding. Dates are estimates at 6 s per block from the preflight run${estimatedFrom ? ` at relay #${estimatedFrom}` : ""}.`,
+    "",
+    "| | Relay block | Estimated (UTC) |",
+    "|---|---|---|",
+    `| Fellowship referendum submitted, with its decision deposit, by | ${d.fellowshipSubmitBy} | ${utc?.fellowshipSubmitBy ?? "n/a"} |`,
+    `| Whitelist on Asset Hub by (cutoff) | ${d.whitelistLandedBy} | ${utc?.whitelistLandedBy ?? "n/a"} |`,
+    `| Whitelisted Caller referendum enacts at | ${d.enactAt} | ${utc?.enactAt ?? "n/a"} |`,
     "",
     "## Dry-run outcomes",
     "",
@@ -122,7 +126,7 @@ function releaseNotes(
     "",
     "| File | Content |",
     "|---|---|",
-    ...CALL_DATA.map(([file, what]) => `| \`${file}\` | ${what} |`),
+    ...CALL_DATA.map(([file, , what]) => `| \`${file}\` | ${what} |`),
     "| `calls.json` | every encoded call, both hashes and the deadlines |",
     "| `params.json` | the inputs |",
     "| `BREAKDOWN.md` | the call data decoded against live metadata |",
@@ -131,14 +135,32 @@ function releaseNotes(
     "",
     "## Verify",
     "",
+    "The published files, then the commit they were built from, then live Polkadot state:",
+    "",
     "```sh",
+    `tar xzf ${tag.replaceAll("/", "-")}.tar.gz && cd ${name}`,
     "sha256sum -c SHA256SUMS",
+    ...CALL_DATA.map(
+      ([file, field]) =>
+        `test "$(cat ${file})" = "$(node -p 'require("./calls.json").${field}')" && echo "${file} matches calls.json" || echo "${file} DIFFERS from calls.json"`,
+    ),
+    `git clone ${REPOSITORY} && cd pcf-refs`,
     `git checkout ${commit} && npm ci`,
-    "npm test        # re-encodes calls.json offline and compares byte for byte",
-    "npm run check   # decode, preflight and dry run against live Polkadot",
+    `diff ../calls.json ${dir}/calls.json && echo "calls.json matches the commit"`,
+    "npm test   # re-encodes calls.json offline and compares byte for byte",
+    `npm run decode -- --proposal ${dir} && git diff --exit-code -- ${dir}/BREAKDOWN.md`,
+    `npm run preflight -- --proposal ${dir}`,
+    `npm run dry-run -- --proposal ${dir}`,
     "```",
     "",
   ].join("\n");
+}
+
+/** Value of a dotted `field` of the package, which must be call data. */
+function fieldOf(pkg: GovernancePackage, field: string): HexString {
+  const value = field.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], pkg);
+  if (typeof value !== "string" || !value.startsWith("0x")) throw new Error(`calls.json has no call data at ${field}`);
+  return value as HexString;
 }
 
 /** `sha256sum`-compatible checksums of every file under `dir`, sorted by path. */

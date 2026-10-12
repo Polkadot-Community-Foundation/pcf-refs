@@ -2,9 +2,9 @@
  * `npm run preflight`: read-only checks of live state before publishing. Writes reports/preflight.{md,json}.
  *
  * - the live runtimes are the ones calls.json was encoded for
- * - the targets are empty: allowances, dispatcher, Bulletin authorizer; the names are Open and unregistered
+ * - the attester allowances are empty and the names are Open and unregistered; the current dispatcher is reported
  * - the addresses are what params.json says: contracts deployed (with code hashes), names owner mapped to its account
- * - the XCM routes from Asset Hub to People and Bulletin are open
+ * - the XCM route from Asset Hub to People is open
  * - the deadlines are still reachable, and the governance state of the package (whitelisted, preimage noted)
  *
  * It also lists the proxies and balances of every account involved, for the forum post.
@@ -20,24 +20,24 @@ import {
   readContract,
   WHITELIST_ABI,
 } from "../lib/dotns.ts";
-import { formatDot, toJson, toSs58 } from "../lib/format.ts";
-import { readPackage } from "../lib/package.ts";
+import { formatDot, toSs58 } from "../lib/format.ts";
+import { type GovernancePackage, readPackage } from "../lib/package.ts";
 import { Report } from "../lib/report.ts";
 
 main(async () => {
   const { proposal } = parseCommand({});
   const p = proposal.params;
   const pkg = readPackage(proposal);
-  const chains = await connect(p.endpoints, ["relay", "assetHub", "people", "bulletin", "collectives"]);
-  const { relay, assetHub: ah, people, bulletin } = chains;
+  const chains = await connect(p.endpoints, ["relay", "assetHub", "people", "collectives"]);
+  const { relay, assetHub: ah, people } = chains;
   const report = new Report();
   const attester = toSs58(p.attester);
-  const authorizer = toSs58(p.bulletin.authorizer);
   const daysFromNow = (block: number, now: number) => `${((block - now) / BLOCKS_PER_DAY).toFixed(1)} days from now`;
+  let deadlinesUtc: Record<keyof GovernancePackage["deadlines"], string> | undefined;
 
   try {
     // Runtimes: the published bytes are only valid for these.
-    for (const key of ["assetHub", "people", "bulletin", "collectives"] as const) {
+    for (const key of Object.keys(pkg.runtimes) as (keyof GovernancePackage["runtimes"])[]) {
       const live = chains[key].spec;
       report.check(
         live === pkg.runtimes[key],
@@ -95,45 +95,21 @@ main(async () => {
     if (namesOwnerAccount) report.info("names owner proxies (Asset Hub)", await proxiesOf(ah, namesOwnerAccount));
     report.info("attester proxies (Asset Hub)", await proxiesOf(ah, attester));
     report.info("attester proxies (People)", await proxiesOf(people, attester));
-    report.info("authorizer proxies (Asset Hub)", await proxiesOf(ah, authorizer));
     report.info(
       "attester free balance",
       `Asset Hub ${await freeOf(ah, attester)}, People ${await freeOf(people, attester)}`,
     );
-    report.info(
-      "authorizer free balance",
-      `Asset Hub ${await freeOf(ah, authorizer)}, Bulletin ${await freeOf(bulletin, authorizer)}`,
-    );
 
-    // Bulletin: authorizer not registered yet, expiry ahead.
-    const existing = await bulletin.api.query.TransactionStorage.AllowedAuthorizers.getValue(authorizer, {
-      at: bulletin.at,
-    });
-    report.check(!existing, "Bulletin authorizer not yet registered", existing ? toJson(existing) : authorizer);
-    const registered = await bulletin.api.query.TransactionStorage.AllowedAuthorizers.getEntries({ at: bulletin.at });
-    report.info("Bulletin authorizers registered today", String(registered.length));
-    const validUntil = pkg.parameters.bulletinBudget.validUntil;
+    // XCM route.
+    const channel = await relay.api.query.Hrmp.HrmpChannels.getValue(
+      { sender: PARA.assetHub, recipient: PARA.people },
+      { at: relay.at },
+    );
     report.check(
-      validUntil > bulletin.block,
-      "Bulletin validUntil is in the future",
-      `#${validUntil}, ${daysFromNow(validUntil, bulletin.block)}`,
+      Boolean(channel),
+      "HRMP channel Asset Hub → People open",
+      channel ? `max message ${channel.max_message_size} B` : "missing",
     );
-
-    // XCM routes.
-    for (const [name, recipient] of [
-      ["People", PARA.people],
-      ["Bulletin", PARA.bulletin],
-    ] as const) {
-      const channel = await relay.api.query.Hrmp.HrmpChannels.getValue(
-        { sender: PARA.assetHub, recipient },
-        { at: relay.at },
-      );
-      report.check(
-        Boolean(channel),
-        `HRMP channel Asset Hub → ${name} open`,
-        channel ? `max message ${channel.max_message_size} B` : "missing",
-      );
-    }
 
     // Governance state of this package, and deadlines.
     const whitelisted = await ah.api.query.Whitelist.WhitelistedCall.getValue(pkg.rootBatchHash, { at: ah.at });
@@ -141,15 +117,27 @@ main(async () => {
     const preimage = await ah.api.query.Preimage.RequestStatusFor.getValue(pkg.refPreimageHash, { at: ah.at });
     report.info("referendum preimage noted on Asset Hub", preimage ? preimage.type : "not yet");
     const d = pkg.deadlines;
+    const now = Number(await relay.api.query.Timestamp.Now.getValue({ at: relay.at }));
+    const utc = (block: number) => estimateUtc(now, block - relay.block);
+    deadlinesUtc = {
+      fellowshipSubmitBy: utc(d.fellowshipSubmitBy),
+      whitelistLandedBy: utc(d.whitelistLandedBy),
+      enactAt: utc(d.enactAt),
+    };
     report.check(
       d.fellowshipSubmitBy > relay.block,
       "Fellowship submission deadline not passed",
-      `relay #${d.fellowshipSubmitBy}, ${daysFromNow(d.fellowshipSubmitBy, relay.block)}`,
+      `relay #${d.fellowshipSubmitBy}, ≈ ${deadlinesUtc.fellowshipSubmitBy}, ${daysFromNow(d.fellowshipSubmitBy, relay.block)}`,
+    );
+    report.check(
+      d.whitelistLandedBy > relay.block,
+      "whitelist cutoff not passed",
+      `relay #${d.whitelistLandedBy}, ≈ ${deadlinesUtc.whitelistLandedBy}, ${daysFromNow(d.whitelistLandedBy, relay.block)}`,
     );
     report.check(
       d.enactAt > relay.block,
       "enactment block in the future",
-      `relay #${d.enactAt}, ${daysFromNow(d.enactAt, relay.block)}`,
+      `relay #${d.enactAt}, ≈ ${deadlinesUtc.enactAt}, ${daysFromNow(d.enactAt, relay.block)}`,
     );
 
     // Deposits the submitter needs.
@@ -172,9 +160,14 @@ main(async () => {
     intro: [
       `Read-only checks by \`src/cli/preflight.ts\` against live Polkadot state. State: ${describeState(chains)}.`,
     ],
-    state: stateOf(chains),
+    state: { ...stateOf(chains), ...(deadlinesUtc && { deadlinesUtc }) },
   });
 });
+
+/** UTC time `blocks` relay blocks after `nowMs`, at 6 s per block, to the minute. */
+function estimateUtc(nowMs: number, blocks: number): string {
+  return `${new Date(nowMs + blocks * 6_000).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
 
 type TrackInfo = [id: number, track: { name: string; decision_deposit: bigint }];
 type ProxyDefinition = { delegate: SS58String; proxy_type: { type: string }; delay: number };
@@ -188,10 +181,7 @@ async function proxiesOf(chain: Chain<"assetHub"> | Chain<"people">, account: SS
   return delegates.map((d) => `${d.delegate} ${d.proxy_type.type} delay ${d.delay}`).join("; ") || "none";
 }
 
-async function freeOf(
-  chain: Chain<"assetHub"> | Chain<"people"> | Chain<"bulletin">,
-  account: SS58String,
-): Promise<string> {
+async function freeOf(chain: Chain<"assetHub"> | Chain<"people">, account: SS58String): Promise<string> {
   const { data } = await chain.api.query.System.Account.getValue(account, { at: chain.at });
   return formatDot(data.free);
 }

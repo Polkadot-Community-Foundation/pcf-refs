@@ -2,25 +2,79 @@
  * Post-enactment checks: the state the package should leave behind. Shared by `verify` (live chains) and `rehearse`
  * (a fork). They also report consumption, for the periodic updates the proposal promises.
  */
-import { BLOCKS_PER_DAY, type Chain } from "./chains.ts";
+import type { Chain } from "./chains.ts";
 import { CONTROLLER_ABI, NAME_STATUS, REGISTRAR_ABI, readContract, tokenIdOf, WHITELIST_ABI } from "./dotns.ts";
-import { formatCount, sameAddress, toJson, toSs58 } from "./format.ts";
+import { formatCount, sameAddress, toSs58 } from "./format.ts";
 import type { Params } from "./proposal.ts";
 import type { Report } from "./report.ts";
 
 export interface EnactedChains {
   assetHub: Chain<"assetHub">;
   people: Chain<"people">;
-  bulletin: Chain<"bulletin">;
 }
 
-export async function checkEnacted(
-  { assetHub: ah, people, bulletin }: EnactedChains,
-  p: Params,
-  report: Report,
-): Promise<void> {
+/** What the package changes, read at the chains' pinned blocks. */
+export interface Targets {
+  allowance: { assetHub: number; people: number };
+  dispatcher: string | undefined;
+  names: Record<string, { status: string; grantee: string; available: boolean }>;
+}
+
+export async function readTargets({ assetHub: ah, people }: EnactedChains, p: Params): Promise<Targets> {
   const attester = toSs58(p.attester);
-  const authorizer = toSs58(p.bulletin.authorizer);
+  const names: Targets["names"] = {};
+  for (const label of p.names) {
+    names[label] = {
+      status: nameStatus(await readContract(ah, p.dotns.nameWhitelist, WHITELIST_ABI, "statusOf", [label])),
+      grantee: await readContract(ah, p.dotns.nameWhitelist, WHITELIST_ABI, "granteeOf", [label]),
+      available: await readContract(ah, p.dotns.registrarController, CONTROLLER_ABI, "available", [label]),
+    };
+  }
+  return {
+    allowance: {
+      assetHub: (await ah.api.query.DotnsGateway.AttestationAllowance.getValue(attester, { at: ah.at })) ?? 0,
+      people: (await people.api.query.PeopleLite.AttestationAllowance.getValue(attester, { at: people.at })) ?? 0,
+    },
+    dispatcher: await ah.api.query.DotnsGateway.DispatcherAddress.getValue({ at: ah.at }),
+    names,
+  };
+}
+
+const nameStatus = (ordinal: number): string => NAME_STATUS[ordinal] ?? `unknown status ${ordinal}`;
+
+/** Checks that enactment changed exactly what the package grants, from `before` to `after`. */
+export function checkTransition(before: Targets, after: Targets, p: Params, report: Report): void {
+  for (const [key, name] of [
+    ["assetHub", "Asset Hub"],
+    ["people", "People"],
+  ] as const) {
+    report.check(
+      after.allowance[key] === before.allowance[key] + p.count,
+      `${name} attester allowance increased by exactly ${formatCount(p.count)}`,
+      `${formatCount(before.allowance[key])} → ${formatCount(after.allowance[key])}`,
+    );
+  }
+  report.check(
+    Boolean(after.dispatcher && sameAddress(after.dispatcher, p.dispatcher)),
+    "dispatcher changed to the proposed address",
+    `${before.dispatcher ?? "unset"} → ${after.dispatcher ?? "unset"}`,
+  );
+  for (const label of p.names) {
+    const [b, a] = [before.names[label], after.names[label]];
+    report.check(
+      b?.status === "Open" &&
+        b.available &&
+        a?.status === "Claimed" &&
+        sameAddress(a.grantee, p.namesOwner) &&
+        a.available,
+      `${label}.dot went from Open to granted to the names owner, still unregistered`,
+      `status ${b?.status} → ${a?.status}, grantee ${b?.grantee} → ${a?.grantee}`,
+    );
+  }
+}
+
+export async function checkEnacted({ assetHub: ah, people }: EnactedChains, p: Params, report: Report): Promise<void> {
+  const attester = toSs58(p.attester);
 
   // Allowances: granted, and how much has been used.
   const allowances = [
@@ -52,23 +106,6 @@ export async function checkEnacted(
       status === "Claimed" && sameAddress(grantee, p.namesOwner),
       `${label}.dot granted to the names owner, not yet registered`,
       `status ${status}, grantee ${grantee}`,
-    );
-  }
-
-  // Bulletin authorizer: registered with the proposed budget.
-  const budget = await bulletin.api.query.TransactionStorage.AllowedAuthorizers.getValue(authorizer, {
-    at: bulletin.at,
-  });
-  report.check(Boolean(budget), "Bulletin authorizer registered", budget ? toJson(budget) : authorizer);
-  if (budget?.valid_until !== undefined) {
-    report.check(
-      budget.valid_until === p.bulletin.validUntil,
-      "Bulletin authorizer expiry as proposed",
-      `#${budget.valid_until}`,
-    );
-    report.info(
-      "Bulletin authorizer expires in",
-      `${((budget.valid_until - bulletin.block) / BLOCKS_PER_DAY).toFixed(1)} days`,
     );
   }
 }

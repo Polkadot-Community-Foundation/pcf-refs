@@ -13,16 +13,17 @@
 import { readFileSync } from "node:fs";
 import { Enum, getOfflineApi, type HexString, type SS58String } from "polkadot-api";
 import { encodeFunctionData } from "viem";
-import { BLOCKS_PER_DAY, descriptors, PARA } from "./chains.ts";
+import { BLOCKS_PER_DAY, CHAIN_NAMES, descriptors, PARA } from "./chains.ts";
 import { WHITELIST_ABI } from "./dotns.ts";
 import { blake2, byteLength, fromHex, toHex, toSs58 } from "./format.ts";
 import type { PinnedParams, Proposal } from "./proposal.ts";
 import { siblingLocation, unpaidTransact } from "./xcm.ts";
 
-/** Fellowship referenda use a 7-day decision period; one more day of margin. */
-const FELLOWSHIP_LEAD_DAYS = 8;
-/** The whitelist must be on Asset Hub a day before the referendum enacts. */
-const WHITELIST_LEAD_DAYS = 1;
+/** Both referenda are assumed to decide within 7 days of their decision deposits; the rest is margin for the whitelist. */
+const DECISION_DAYS = 7;
+/** The whitelist must be on Asset Hub this long before the referendum enacts. */
+const WHITELIST_LEAD_DAYS = 2;
+const FELLOWSHIP_LEAD_DAYS = DECISION_DAYS + WHITELIST_LEAD_DAYS;
 /** Enactment delay of the Fellowship referendum, in Collectives blocks. */
 const FELLOWSHIP_ENACTMENT_AFTER = 10;
 
@@ -30,7 +31,7 @@ const FELLOWSHIP_ENACTMENT_AFTER = 10;
 export interface GovernancePackage {
   title: string;
   /** `spec_version` of the runtimes the package is encoded for. */
-  runtimes: { assetHub: number; people: number; bulletin: number; collectives: number };
+  runtimes: { assetHub: number; people: number; collectives: number };
   parameters: {
     attester: SS58String;
     count: number;
@@ -38,8 +39,6 @@ export interface GovernancePackage {
     names: string[];
     namesOwner: HexString;
     nameWhitelist: HexString;
-    bulletinAuthorizer: SS58String;
-    bulletinBudget: { transactions: number; bytes: string; validUntil: number; feeless: boolean };
   };
   /** Relay block numbers. */
   deadlines: { enactAt: number; fellowshipSubmitBy: number; whitelistLandedBy: number };
@@ -51,8 +50,6 @@ export interface GovernancePackage {
     assetHubXcmToPeople: HexString;
     grantNamesCalldata: HexString;
     assetHubGrantNames: HexString;
-    bulletinAddAuthorizer: HexString;
-    assetHubXcmToBulletin: HexString;
   };
   /** The batch: what the Fellowship whitelists and what executes with Root. */
   rootBatch: HexString;
@@ -67,25 +64,15 @@ export interface GovernancePackage {
 }
 
 export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> {
-  const [ah, people, bulletin, collectives] = await Promise.all([
+  const [ah, people, collectives] = await Promise.all([
     getOfflineApi(descriptors.assetHub),
     getOfflineApi(descriptors.people),
-    getOfflineApi(descriptors.bulletin),
     getOfflineApi(descriptors.collectives),
   ]);
   const attester = toSs58(p.attester);
-  const authorizer = toSs58(p.bulletin.authorizer);
 
-  // Calls executed on other chains, carried by XCM.
+  // Call executed on People, carried by XCM.
   const peopleAllowance = people.tx.PeopleLite.increase_attestation_allowance({ account: attester, count: p.count });
-  const bulletinAddAuthorizer = bulletin.tx.TransactionStorage.add_authorizer({
-    who: authorizer,
-    budget: {
-      quota: { transactions: p.bulletin.transactions, bytes: BigInt(p.bulletin.bytes) },
-      valid_until: p.bulletin.validUntil,
-      feeless: p.bulletin.feeless,
-    },
-  });
   const grantNamesCalldata = encodeFunctionData({
     abi: WHITELIST_ABI,
     functionName: "grantNames",
@@ -106,10 +93,6 @@ export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> 
       storage_deposit_limit: BigInt(p.grantStorageDepositLimit),
       data: fromHex(grantNamesCalldata),
     }),
-    assetHubXcmToBulletin: ah.tx.PolkadotXcm.send({
-      dest: siblingLocation(PARA.bulletin),
-      message: unpaidTransact(bulletinAddAuthorizer.encodedData, "Superuser"),
-    }),
   };
   const batch = ah.tx.Utility.batch_all({
     calls: [
@@ -117,7 +100,6 @@ export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> 
       calls.assetHubDispatcher.decodedCall,
       calls.assetHubXcmToPeople.decodedCall,
       calls.assetHubGrantNames.decodedCall,
-      calls.assetHubXcmToBulletin.decodedCall,
     ],
   });
   const rootBatch = toHex(batch.encodedData);
@@ -151,7 +133,6 @@ export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> 
     runtimes: {
       assetHub: ah.constants.System.Version.spec_version,
       people: people.constants.System.Version.spec_version,
-      bulletin: bulletin.constants.System.Version.spec_version,
       collectives: collectives.constants.System.Version.spec_version,
     },
     parameters: {
@@ -161,13 +142,6 @@ export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> 
       names: p.names,
       namesOwner: p.namesOwner,
       nameWhitelist: p.dotns.nameWhitelist,
-      bulletinAuthorizer: authorizer,
-      bulletinBudget: {
-        transactions: p.bulletin.transactions,
-        bytes: p.bulletin.bytes,
-        validUntil: p.bulletin.validUntil,
-        feeless: p.bulletin.feeless,
-      },
     },
     deadlines: {
       enactAt: p.enactAt,
@@ -181,8 +155,6 @@ export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> 
       assetHubXcmToPeople: toHex(calls.assetHubXcmToPeople.encodedData),
       grantNamesCalldata,
       assetHubGrantNames: toHex(calls.assetHubGrantNames.encodedData),
-      bulletinAddAuthorizer: toHex(bulletinAddAuthorizer.encodedData),
-      assetHubXcmToBulletin: toHex(calls.assetHubXcmToBulletin.encodedData),
     },
     rootBatch,
     rootBatchLen: byteLength(rootBatch),
@@ -198,6 +170,12 @@ export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> 
     submission: { notePreimage: toHex(notePreimage), referendaSubmit: toHex(referendaSubmit) },
   };
 }
+
+/** The runtimes the package is encoded for, as `Asset Hub 2005000, People 2005000, …`. */
+export const describeRuntimes = (runtimes: GovernancePackage["runtimes"]): string =>
+  Object.entries(runtimes)
+    .map(([chain, spec]) => `${CHAIN_NAMES[chain as keyof typeof runtimes]} ${spec}`)
+    .join(", ");
 
 /** Reads the committed `calls.json` of a proposal. */
 export function readPackage(proposal: Proposal): GovernancePackage {

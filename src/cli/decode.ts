@@ -6,26 +6,33 @@
  */
 import { writeFileSync } from "node:fs";
 import type { HexString } from "polkadot-api";
-import { type ChainKey, connect } from "../lib/chains.ts";
+import { CHAIN_NAMES, type ChainKey, connect } from "../lib/chains.ts";
 import { main, parseCommand } from "../lib/cli.ts";
 import { CallDecoder } from "../lib/decode.ts";
 import { blake2, byteLength } from "../lib/format.ts";
-import { readPackage } from "../lib/package.ts";
+import { type GovernancePackage, readPackage } from "../lib/package.ts";
 
 main(async () => {
   const { proposal, flags } = parseCommand({
     hex: { type: "string" },
     chain: { type: "string", default: "assetHub" },
   });
-  const chains = await connect(proposal.params.endpoints, ["assetHub", "people", "bulletin", "collectives"]);
+  if (flags.hex) {
+    const chains = await connect(proposal.params.endpoints, ["assetHub", "people", "bulletin", "collectives"]);
+    try {
+      const tree = await new CallDecoder(chains).render(flags.chain as ChainKey, flags.hex as HexString);
+      console.log(tree.join("\n"));
+      return 0;
+    } finally {
+      chains.close();
+    }
+  }
+
+  const pkg = readPackage(proposal);
+  const keys = Object.keys(pkg.runtimes) as (keyof GovernancePackage["runtimes"])[];
+  const chains = await connect(proposal.params.endpoints, keys);
   try {
     const decoder = new CallDecoder(chains);
-    if (flags.hex) {
-      console.log((await decoder.render(flags.chain as ChainKey, flags.hex as HexString)).join("\n"));
-      return 0;
-    }
-
-    const pkg = readPackage(proposal);
     const mismatches: string[] = [];
     const expect = (what: string, computed: unknown, published: unknown) => {
       if (computed !== published) mismatches.push(`${what}: computed ${computed}, calls.json ${published}`);
@@ -46,7 +53,7 @@ main(async () => {
     const md = [
       `# ${pkg.title}: decoded calls`,
       "",
-      `Decoded by \`src/cli/decode.ts\` from the bytes in \`calls.json\` against live metadata (Asset Hub ${chains.assetHub.spec}, People ${chains.people.spec}, Bulletin ${chains.bulletin.spec}, Collectives ${chains.collectives.spec}). Every hash below is recomputed from the bytes.`,
+      `Decoded by \`src/cli/decode.ts\` from the bytes in \`calls.json\` against live metadata (${keys.map((k) => `${CHAIN_NAMES[k]} ${chains[k].spec}`).join(", ")}). Every hash below is recomputed from the bytes.`,
       "",
       "## Referendum preimage (Asset Hub, Whitelisted Caller track)",
       "",

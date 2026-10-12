@@ -19,7 +19,7 @@ Each proposal lives in `proposals/<name>/`:
 
 | File | Committed | Content |
 |---|---|---|
-| `params.json` | yes | the only input: addresses, amounts, names, budgets, enactment block, RPC endpoints |
+| `params.json` | yes | the only input: addresses, amounts, names, enactment block, RPC endpoints |
 | `calls.json` | yes | every encoded call, both hashes and the deadlines |
 | `BREAKDOWN.md` | yes | the call data decoded call by call against live metadata |
 | `reports/` | no | reports (`.md`), logs (`.json`) and console output (`.log`) of the online commands; published by CI and in releases |
@@ -35,14 +35,17 @@ through the Whitelisted Caller track:
 | Asset Hub | `DotnsGateway.set_dispatcher_address(dispatcher)` |
 | People | `PeopleLite.increase_attestation_allowance(attester, count)`, sent from Asset Hub as an XCM `Transact` with origin kind `Superuser` |
 | Asset Hub | `Revive.call(DotnsNameWhitelist, grantNames(names, namesOwner))` |
-| Bulletin | `TransactionStorage.add_authorizer(authorizer, budget)`, sent from Asset Hub as an XCM `Transact` with origin kind `Superuser` |
+
+The proposal does not ask for Bulletin storage: PCF funds its own through paid lite personhood
+(`PeopleLite.register_with_fee`, then `Resources.claim_long_term_storage`, both on People), with no governance call.
 
 The Fellowship whitelists the hash of that batch with a referendum on Collectives (Fellows origin, an XCM
 `Whitelist.whitelist_call` to Asset Hub). The Asset Hub referendum carries
 `Whitelist.dispatch_whitelisted_call_with_preimage(batch)` with a fixed `At(enactAt)` enactment, so it cannot enact
-before the whitelist lands. The Fellowship referendum must be submitted 8 days before `enactAt` (7-day decision
-plus a day of margin) and the whitelist must be on Asset Hub 24 hours before it; `calls.json` records both as relay
-blocks.
+before the whitelist lands. Both referenda are assumed to decide within 7 days of their decision deposits, and the
+whitelist must be on Asset Hub 2 days before `enactAt`. So the Fellowship referendum must be submitted, with its
+decision deposit, 9 days before `enactAt`; `calls.json` records both deadlines as relay blocks. `pin` sets `enactAt`
+10 days out, leaving a day to publish the release and submit both referenda.
 
 ## Releases
 
@@ -55,14 +58,22 @@ pre-release. The release workflow re-runs every check on a clean runner and publ
 - a tarball of all of it with `SHA256SUMS`, and release notes listing both hashes, the deadlines and the outcome of
   each report.
 
-To verify a release:
+To verify a release, check the published files, tie them to the commit they were built from, then run the checks
+against live Polkadot. The tarball is named after the tag with `/` replaced by `-`:
 
 ```sh
-tar xzf <tag>.tar.gz && (cd <proposal> && sha256sum -c SHA256SUMS)
+tar xzf <proposal>-v<n>[-rc<m>].tar.gz && cd <proposal> && sha256sum -c SHA256SUMS
+git clone https://github.com/Polkadot-Community-Foundation/pcf-refs && cd pcf-refs
 git checkout <commit from the release notes> && npm ci
-npm test        # re-encodes calls.json offline and compares byte for byte
-npm run check   # decode, preflight and dry run against live Polkadot
+diff ../calls.json proposals/<proposal>/calls.json   # the published call data is this commit's
+npm test                                             # re-encodes calls.json offline and compares byte for byte
+npm run decode -- --proposal proposals/<proposal> && git diff --exit-code -- proposals/<proposal>/BREAKDOWN.md
+npm run preflight -- --proposal proposals/<proposal>
+npm run dry-run -- --proposal proposals/<proposal>
 ```
+
+The release notes list these commands for the release, plus one check of each `*.hex` file against its field in
+`calls.json`.
 
 ## Continuous checks
 
@@ -89,24 +100,24 @@ npm ci
 
 | Command | Network | What it does |
 |---|---|---|
-| `npm run pin` | relay, Bulletin | Fills a `null` `enactAt` (relay block now + `enactInDays`) and `bulletin.validUntil` (Bulletin block now + `validDays`) in `params.json`. Values already set are kept. |
+| `npm run pin` | relay | Fills a `null` `enactAt` (relay block now + `enactInDays`) in `params.json`. A value already set is kept. |
 | `npm run encode` | none | Encodes the package into `calls.json`. `-- --check` compares instead of writing. |
-| `npm run decode` | all | Decodes `calls.json` against live metadata into `BREAKDOWN.md`, following each XCM `Transact` into the destination chain and the Revive calldata into the DotNS ABI. Recomputes every hash and fails on a mismatch. `-- --hex <call> --chain <assetHub\|collectives\|people\|bulletin>` decodes any call. |
-| `npm run preflight` | all | Live state before publication: runtimes unchanged, allowances empty, dispatcher deployed (with code hashes), names `Open` and unregistered, names owner mapped to its account, authorizer not yet registered, HRMP channels open, deadlines reachable. Lists the proxies and balances of every account involved. |
-| `npm run dry-run` | all | `DryRunApi` on live state: the batch with Root on Asset Hub, then each forwarded XCM on People and Bulletin; the Fellowship proposal with the Fellows origin, then its XCM on Asset Hub; the preimage with the WhitelistedCaller origin, expected to fail with `CallIsNotWhitelisted` until the whitelist lands; and, with `-- --submitter <ss58>` or `params.submitter`, `note_preimage` + `Referenda.submit` to show the deposits. |
-| `npm run rehearse` | all, on a local fork | Forks Asset Hub, People, Bulletin and Collectives with Chopsticks, enacts both referenda through the scheduler with their real origins, delivers the XCMs and runs the post-enactment checks. Voting is not simulated. `-- --port-base <n>` (default 8100), `-- --keep`. |
-| `npm run verify` | Asset Hub, People, Bulletin | After enactment: live state against `params.json`, with allowance used, names registered and Bulletin budget, for periodic reports. |
+| `npm run decode` | Asset Hub, People, Collectives (`--hex` also Bulletin) | Decodes `calls.json` against live metadata into `BREAKDOWN.md`, following each XCM `Transact` into the destination chain and the Revive calldata into the DotNS ABI. Recomputes every hash and fails on a mismatch. `-- --hex <call> --chain <assetHub\|collectives\|people\|bulletin>` decodes any call. |
+| `npm run preflight` | relay, Asset Hub, People, Collectives | Live state before publication: runtimes unchanged, allowances empty, dispatcher deployed (with code hashes), names `Open` and unregistered, names owner mapped to its account, HRMP channel to People open, deadlines reachable (with estimated UTC dates, which the release notes repeat). Lists the proxies and balances of every account involved. |
+| `npm run dry-run` | Asset Hub, People, Collectives | `DryRunApi` on live state: the batch with Root on Asset Hub, then its one forwarded XCM on People, and no XCM to any other chain; the Fellowship proposal with the Fellows origin, then its XCM on Asset Hub; the preimage with the WhitelistedCaller origin, expected to fail with `CallIsNotWhitelisted` until the whitelist lands; and, with `-- --submitter <ss58>` or `params.submitter`, `note_preimage` + `Referenda.submit` to show the deposits. |
+| `npm run rehearse` | Asset Hub, People, Collectives, on a local fork | Forks Asset Hub, People and Collectives with Chopsticks, enacts both referenda through the scheduler with their real origins, delivers the XCMs (Asset Hub must send exactly one, to People), then reads the state it changes before and after: each allowance must grow by exactly `count`, the dispatcher must become the proposed address, and each name must go from `Open` to granted to the names owner. Then it runs the post-enactment checks. Voting is not simulated. `-- --port-base <n>` (default 8100), `-- --keep`. |
+| `npm run verify` | Asset Hub, People | After enactment: live state against `params.json`, with allowance used and names registered, for periodic reports. |
 | `npm run bundle` | none | Assembles the release assets into `dist/<proposal>/`; refuses unless `calls.json` re-encodes and every report passed. |
-| `npm run check` | all | `encode --check`, `decode`, `preflight` and `dry-run` in one go. |
+| `npm run check` | relay, Asset Hub, People, Collectives | `encode --check`, `decode`, `preflight` and `dry-run` in one go. |
 
-Every command takes `-- --proposal <dir>` (default `proposals/app-onboarding`). Reports go to
-`proposals/<name>/reports/`.
+Every command but `check` takes `-- --proposal <dir>` (default `proposals/app-onboarding`); `check` runs the default.
+Reports go to `proposals/<name>/reports/`.
 
 ## Preparing a release
 
-1. Pin the dates: set `enactAt` and `bulletin.validUntil` to `null`, then `npm run pin && npm run encode && npm run decode`.
-   Pinning changes both hashes, so pin once, open a pull request, and tag the merge commit.
-2. Tag it: `git tag <proposal>/v1-rc1 && git push origin <proposal>/v1-rc1`.
+1. Pin the enactment block: set `enactAt` to `null`, then `npm run pin && npm run encode && npm run decode`. Pinning
+   changes `Referenda.submit` and the deadlines, so pin once, open a pull request, and tag the merge commit.
+2. Tag it with the next unused version: `git tag <proposal>/v<n>-rc<m> && git push origin <proposal>/v<n>-rc<m>`.
 
 If the whitelist misses `enactAt`, the referendum enacts without effect. The whitelist is keyed by the inner call
 hash, so only the Asset Hub referendum needs a new `enactAt`; its preimage does not change.

@@ -1,34 +1,36 @@
 /**
- * `npm run rehearse`: runs the whole governance sequence on a Chopsticks fork of live Asset Hub, People, Bulletin and
- * Collectives, connected over XCM. Writes reports/rehearsal.{md,json}.
+ * `npm run rehearse`: runs the whole governance sequence on a Chopsticks fork of live Asset Hub, People and Collectives,
+ * connected over XCM. Writes reports/rehearsal.{md,json}.
  *
  * 1. The Fellowship referendum enacts on Collectives (scheduled with the Fellows origin) and whitelists the call on
  *    Asset Hub.
  * 2. The Whitelisted Caller referendum enacts on Asset Hub: the preimage is noted and the call is scheduled by Lookup
- *    with the WhitelistedCaller origin, as Referenda does at `At(enactAt)`.
- * 3. People and Bulletin receive and execute their XCMs.
+ *    with the WhitelistedCaller origin, as Referenda does at `At(enactAt)`. Asset Hub sends one XCM, to People.
+ * 3. People receives and executes it.
  * 4. The post-enactment checks of `verify` run on the forked state.
  *
  * Voting is not simulated. Chopsticks runs each chain's real runtime on live state, but no collators and no relay
  * inclusion.
  *
- *   --port-base <n>   first local port (default 8100; four are used)
+ *   --port-base <n>   first local port (default 8100; three are used)
  *   --keep            leave the fork running afterwards
  */
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { Bytes } from "@polkadot-api/substrate-bindings";
 import type { HexString } from "polkadot-api";
-import { type Chain, type Chains, connect, stateOf } from "../lib/chains.ts";
+import { type Chain, type Chains, connect, PARA, stateOf } from "../lib/chains.ts";
 import { devRpc, Fork } from "../lib/chopsticks.ts";
 import { finish, main, parseCommand } from "../lib/cli.ts";
-import { checkEnacted } from "../lib/enacted.ts";
+import { checkEnacted, checkTransition, readTargets } from "../lib/enacted.ts";
 import { eventNames, findEvents, notableEvents, type RuntimeEvent } from "../lib/events.ts";
 import { fromHex, toHex, toJson } from "../lib/format.ts";
 import { type GovernancePackage, readPackage } from "../lib/package.ts";
 import { Report } from "../lib/report.ts";
+import { siblingLocation } from "../lib/xcm.ts";
 
-const FORKED = ["assetHub", "people", "bulletin", "collectives"] as const;
+const FORKED = ["assetHub", "people", "collectives"] as const;
 type ForkedChains = Chains<(typeof FORKED)[number]>;
 /** Blocks to wait for an XCM to be delivered and executed. */
 const DELIVERY_BLOCKS = 3;
@@ -50,26 +52,28 @@ main(async () => {
     Number(flags["port-base"]),
     join(proposal.reports, "chopsticks.log"),
   );
-  let chains: ForkedChains | undefined;
+  const connections: ForkedChains[] = [];
   let forkedAt: Record<string, unknown> = {};
   try {
     const live = await connect(fork.endpoints, FORKED);
-    chains = live;
+    connections.push(live);
     forkedAt = stateOf(live);
     // Chopsticks builds catch-up blocks right after connecting the chains, and storage set during one of them is
     // lost. newBlock queues behind them, so one block per chain settles the forks before anything is injected.
     await Promise.all(FORKED.map((k) => devRpc(live[k].client).newBlock()));
 
+    const before = await readTargets(live, p);
     await enactFellowshipReferendum(live, pkg, report);
-    const before = { people: await headNumber(live.people), bulletin: await headNumber(live.bulletin) };
+    const peopleBefore = await headNumber(live.people);
     await enactWhitelistedCallerReferendum(live, pkg, report);
-    await expectDelivery(live.people, before.people, "PeopleLite", "AttestationAllowanceIncreased", report);
-    await expectDelivery(live.bulletin, before.bulletin, "TransactionStorage", "AuthorizerAdded", report);
+    await expectDelivery(live.people, peopleBefore, "PeopleLite", "AttestationAllowanceIncreased", report);
 
-    // Reconnect so every read is pinned to the post-enactment head.
-    live.close();
-    chains = await connect(fork.endpoints, FORKED);
-    await checkEnacted(chains, p, report);
+    // A second connection pins every read to the post-enactment head. The first one stays open until the end: its
+    // clients may still be fetching runtimes for the blocks just built.
+    const enacted = await connect(fork.endpoints, FORKED);
+    connections.push(enacted);
+    checkTransition(before, await readTargets(enacted, p), p, report);
+    await checkEnacted(enacted, p, report);
   } catch (error) {
     report.check(
       false,
@@ -77,7 +81,7 @@ main(async () => {
       error instanceof Error ? error.message.split("\n")[0] : String(error),
     );
   } finally {
-    chains?.close();
+    for (const chains of connections) chains.close();
     if (!flags.keep) fork.stop();
   }
 
@@ -85,7 +89,7 @@ main(async () => {
     command: "rehearse",
     title: `Rehearsal (Chopsticks): ${p.title}`,
     intro: [
-      "End-to-end probe by `src/cli/rehearse.ts` on a local Chopsticks fork of live Asset Hub, People, Bulletin and Collectives; nothing reaches the live chains. The Fellowship referendum and the Whitelisted Caller referendum are enacted through the scheduler with their real origins; voting is not simulated.",
+      "End-to-end probe by `src/cli/rehearse.ts` on a local Chopsticks fork of live Asset Hub, People and Collectives; nothing reaches the live chains. The Fellowship referendum and the Whitelisted Caller referendum are enacted through the scheduler with their real origins; voting is not simulated.",
       `Inner call hash \`${pkg.rootBatchHash}\`, preimage hash \`${pkg.refPreimageHash}\`.`,
     ],
     state: forkedAt,
@@ -161,13 +165,19 @@ async function enactWhitelistedCallerReferendum(
       "Asset Hub: inner batch succeeded inside the whitelisted dispatch",
       toJson(dispatched.result),
     );
+  const sent = findEvents<{ destination: unknown }>(events, "PolkadotXcm", "Sent").map((e) => e.destination);
+  report.check(
+    sent.length === 1 && isDeepStrictEqual(sent[0], siblingLocation(PARA.people).value),
+    "Asset Hub: one XCM sent, to People",
+    toJson(sent),
+  );
   report.info("Asset Hub events", notableEvents(events).join(", "));
 }
 
 /** Step 3: build blocks on `chain` until `pallet.event` appears. Chopsticks may build the receiving block itself, so
  * every block after `since` is scanned. */
 async function expectDelivery(
-  chain: Chain<"people"> | Chain<"bulletin">,
+  chain: Chain<"people">,
   since: number,
   pallet: string,
   event: string,
