@@ -1,30 +1,36 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { getOfflineApi } from "polkadot-api";
-import { descriptors } from "../src/lib/chains.ts";
-import { blake2, toJson } from "../src/lib/format.ts";
+import { getOfflineApi, getTypedCodecs, type HexString } from "polkadot-api";
+import { type ChainKey, descriptors, PARA } from "../src/lib/chains.ts";
+import { blake2, fromHex, toHex, toJson, toSs58 } from "../src/lib/format.ts";
 import { buildPackage, type GovernancePackage } from "../src/lib/package.ts";
-import { loadProposal, requirePinned } from "../src/lib/proposal.ts";
+import { DEFAULT_PROPOSAL, loadProposal, requirePinned } from "../src/lib/proposal.ts";
+import { siblingLocation } from "../src/lib/xcm.ts";
 
-const proposals = readdirSync("proposals")
-  .map((name) => `proposals/${name}`)
-  .filter((dir) => existsSync(`${dir}/params.json`));
+/** `spec_version` of the runtime the committed metadata in .papi/ describes. */
+const committedSpec = async (chain: ChainKey): Promise<number> =>
+  (await getOfflineApi(descriptors[chain])).constants.System.Version.spec_version;
 
-/** Runtimes described by the committed metadata in .papi/. */
-const committed = {
-  assetHub: (await getOfflineApi(descriptors.assetHub)).constants.System.Version.spec_version,
-  people: (await getOfflineApi(descriptors.people)).constants.System.Version.spec_version,
-  bulletin: (await getOfflineApi(descriptors.bulletin)).constants.System.Version.spec_version,
-  collectives: (await getOfflineApi(descriptors.collectives)).constants.System.Version.spec_version,
-};
+const proposals = await Promise.all(
+  readdirSync("proposals")
+    .map((name) => `proposals/${name}`)
+    .filter((dir) => existsSync(`${dir}/params.json`))
+    .map(async (dir) => {
+      const published = JSON.parse(readFileSync(`${dir}/calls.json`, "utf8")) as GovernancePackage;
+      const runtimes = Object.keys(published.runtimes) as ChainKey[];
+      const committed = Object.fromEntries(
+        await Promise.all(runtimes.map(async (chain) => [chain, await committedSpec(chain)])),
+      );
+      // A proposal encoded for older runtimes cannot be reproduced from newer metadata.
+      const skip =
+        toJson(published.runtimes) === toJson(committed) ? false : `encoded for ${toJson(published.runtimes)}`;
+      return { dir, published, skip };
+    }),
+);
 
 describe("buildPackage", () => {
-  for (const dir of proposals) {
-    const published = JSON.parse(readFileSync(`${dir}/calls.json`, "utf8")) as GovernancePackage;
-    // A proposal encoded for older runtimes cannot be reproduced from newer metadata.
-    const skip = toJson(published.runtimes) === toJson(committed) ? false : `encoded for ${toJson(published.runtimes)}`;
-
+  for (const { dir, published, skip } of proposals) {
     it(`reproduces ${dir}/calls.json byte for byte, offline`, { skip }, async () => {
       const pkg = await buildPackage(requirePinned(loadProposal(dir).params));
       assert.equal(`${toJson(pkg, 2)}\n`, readFileSync(`${dir}/calls.json`, "utf8"));
@@ -43,6 +49,78 @@ describe("buildPackage", () => {
         published.submission.referendaSubmit.includes(published.refPreimageHash.slice(2)),
         "referendum looks up the preimage",
       );
+    });
+  }
+});
+
+type DecodedCall = { type: string; value: { type: string; value: Record<string, unknown> } };
+type XcmInstruction = { type: string; value: { origin_kind?: { type: string }; call?: Uint8Array } };
+
+const [ah, people, ahCodecs, peopleCodecs] = await Promise.all([
+  getOfflineApi(descriptors.assetHub),
+  getOfflineApi(descriptors.people),
+  getTypedCodecs(descriptors.assetHub),
+  getTypedCodecs(descriptors.people),
+]);
+
+/** Splits call data into its 2-byte call index and its arguments. */
+const splitCall = (call: Uint8Array) => ({ index: toHex(call.slice(0, 2)), args: call.slice(2) });
+
+/** Decodes a `Utility.batch_all` with the committed Asset Hub metadata, without a connection. */
+function decodeBatch(rootBatch: HexString): DecodedCall[] {
+  const { index, args } = splitCall(fromHex(rootBatch));
+  assert.equal(index, splitCall(ah.tx.Utility.batch_all({ calls: [] }).encodedData).index, "Utility.batch_all");
+  return ahCodecs.tx.Utility.batch_all.dec(args).calls as unknown as DecodedCall[];
+}
+
+describe(`${DEFAULT_PROPOSAL} inner call`, () => {
+  const { published, skip } = proposals.find((p) => p.dir === DEFAULT_PROPOSAL) ?? assert.fail(DEFAULT_PROPOSAL);
+  const params = requirePinned(loadProposal(DEFAULT_PROPOSAL).params);
+  const attester = toSs58(params.attester);
+
+  it("is encoded for Asset Hub, People and Collectives only", () => {
+    assert.deepEqual(Object.keys(published.runtimes), ["assetHub", "people", "collectives"]);
+  });
+
+  const batches = [
+    ["encoded from params.json", async () => (await buildPackage(params)).rootBatch, false],
+    ["committed in calls.json", async () => published.rootBatch, skip],
+  ] as const;
+  for (const [what, rootBatch, skipBatch] of batches) {
+    it(`${what}: batches exactly the four onboarding calls, in order`, { skip: skipBatch }, async () => {
+      const calls = decodeBatch(await rootBatch());
+      assert.deepEqual(
+        calls.map((c) => `${c.type}.${c.value.type}`),
+        [
+          "DotnsGateway.increase_attestation_allowance",
+          "DotnsGateway.set_dispatcher_address",
+          "PolkadotXcm.send",
+          "Revive.call",
+        ],
+      );
+    });
+
+    it(`${what}: sends one XCM, to People, granting the attester allowance`, { skip: skipBatch }, async () => {
+      const sends = decodeBatch(await rootBatch()).filter((c) => c.type === "PolkadotXcm" && c.value.type === "send");
+      assert.deepEqual(
+        sends.map((c) => c.value.value.dest),
+        [siblingLocation(PARA.people)],
+      );
+      const send = sends[0] ?? assert.fail("no XCM");
+      const message = (send.value.value.message as { value: XcmInstruction[] }).value;
+      assert.deepEqual(
+        message.map((i) => i.type),
+        ["UnpaidExecution", "Transact"],
+      );
+      const transact = message[1]?.value ?? assert.fail("no Transact");
+      assert.equal(transact.origin_kind?.type, "Superuser");
+      const { index, args } = splitCall(transact.call ?? assert.fail("no call in Transact"));
+      const allowance = people.tx.PeopleLite.increase_attestation_allowance({ account: attester, count: params.count });
+      assert.equal(index, splitCall(allowance.encodedData).index, "PeopleLite.increase_attestation_allowance");
+      assert.deepEqual(peopleCodecs.tx.PeopleLite.increase_attestation_allowance.dec(args), {
+        account: attester,
+        count: params.count,
+      });
     });
   }
 });

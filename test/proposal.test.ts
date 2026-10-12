@@ -35,6 +35,14 @@ describe("loadProposal", () => {
   it("rejects a non-positive allowance", () => {
     assert.throws(() => loadProposal(withParams((p) => (p.count = 0))), /count/);
   });
+
+  it("rejects a key it does not know", () => {
+    assert.throws(() => loadProposal(withParams((p) => Object.assign(p, { budget: 1 }))), /unknown key budget/);
+  });
+
+  it("rejects a missing key", () => {
+    assert.throws(() => loadProposal(withParams((p) => delete (p as Partial<Params>).enactAt)), /missing key enactAt/);
+  });
 });
 
 describe("requirePinned", () => {

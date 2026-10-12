@@ -41,15 +41,7 @@
     "proofSize": "1000000"
   },
   "grantStorageDepositLimit": "10000000000",
-  "bulletin": {
-    "authorizer": "1YoKNfXM43vegdG6g4XHCDPK6EGykYgHPNkXfRL6etnma1b",
-    "transactions": 5000,
-    "bytes": "10737418240",
-    "validDays": 365,
-    "validUntil": 7418284,
-    "feeless": true
-  },
-  "enactInDays": 14,
+  "enactInDays": 10,
   "enactAt": 33554413,
   "submitter": null
 }

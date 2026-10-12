@@ -6,7 +6,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { main, parseCommand } from "../lib/cli.ts";
 import { toJson } from "../lib/format.ts";
-import { buildPackage } from "../lib/package.ts";
+import { buildPackage, describeRuntimes } from "../lib/package.ts";
 import { requirePinned } from "../lib/proposal.ts";
 
 main(async () => {
@@ -24,11 +24,8 @@ main(async () => {
   }
 
   writeFileSync(file, json);
-  const r = pkg.runtimes;
   const d = pkg.deadlines;
-  console.log(
-    `runtimes         Asset Hub ${r.assetHub}, People ${r.people}, Bulletin ${r.bulletin}, Collectives ${r.collectives}`,
-  );
+  console.log(`runtimes         ${describeRuntimes(pkg.runtimes)}`);
   console.log(`rootBatchHash    ${pkg.rootBatchHash}  (${pkg.rootBatchLen} B, whitelisted by the Fellowship)`);
   console.log(`refPreimageHash  ${pkg.refPreimageHash}  (${pkg.refPreimageLen} B, looked up by the referendum)`);
   console.log(

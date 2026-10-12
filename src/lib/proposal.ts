@@ -31,17 +31,6 @@ export interface Params {
   grantWeight: { refTime: string; proofSize: string };
   /** Revive storage deposit limit for `grantNames`, in planck. Root is not charged, but 0 reverts the call. */
   grantStorageDepositLimit: string;
-  bulletin: {
-    authorizer: string;
-    transactions: number;
-    /** Byte quota, as a decimal string. */
-    bytes: string;
-    /** Validity used by `pin` when `validUntil` is null. */
-    validDays: number;
-    /** Bulletin block the authorizer expires at. */
-    validUntil: number | null;
-    feeless: boolean;
-  };
   /** Delay used by `pin` when `enactAt` is null. */
   enactInDays: number;
   /** Relay block the Whitelisted Caller referendum enacts at. */
@@ -50,8 +39,8 @@ export interface Params {
   submitter: string | null;
 }
 
-/** Params whose dates are fixed, so the encoding (and its hashes) is reproducible. */
-export type PinnedParams = Params & { enactAt: number; bulletin: Params["bulletin"] & { validUntil: number } };
+/** Params whose enactment block is fixed, so the encoding is reproducible. */
+export type PinnedParams = Params & { enactAt: number };
 
 export interface Proposal {
   dir: string;
@@ -78,22 +67,39 @@ export function saveParams(proposal: Proposal): void {
 }
 
 export function isPinned(params: Params): params is PinnedParams {
-  return params.enactAt !== null && params.bulletin.validUntil !== null;
+  return typeof params.enactAt === "number";
 }
 
 export function requirePinned(params: Params): PinnedParams {
-  if (!isPinned(params))
-    throw new Error("params.json has unpinned dates (enactAt, bulletin.validUntil): run `npm run pin`");
+  if (!isPinned(params)) throw new Error("params.json has no enactment block (enactAt): run `npm run pin`");
   return params;
 }
 
 const H160 = /^0x[0-9a-fA-F]{40}$/;
 const LABEL = /^[a-z0-9-]+$/;
+/** Keys params.json may have. */
+const KEYS: Record<keyof Params, true> = {
+  title: true,
+  endpoints: true,
+  attester: true,
+  count: true,
+  dispatcher: true,
+  names: true,
+  namesOwner: true,
+  dotns: true,
+  grantWeight: true,
+  grantStorageDepositLimit: true,
+  enactInDays: true,
+  enactAt: true,
+  submitter: true,
+};
 
 function validate(p: Params): void {
   const fail = (msg: string): never => {
     throw new Error(`params.json: ${msg}`);
   };
+  for (const key of Object.keys(p)) if (!Object.hasOwn(KEYS, key)) fail(`unknown key ${key}`);
+  for (const key of Object.keys(KEYS)) if (!Object.hasOwn(p, key)) fail(`missing key ${key}`);
   for (const [key, value] of Object.entries({
     dispatcher: p.dispatcher,
     namesOwner: p.namesOwner,
@@ -110,11 +116,7 @@ function validate(p: Params): void {
     }
   }
   toSs58(p.attester);
-  toSs58(p.bulletin.authorizer);
   if (p.submitter !== null) toSs58(p.submitter);
   if (!Number.isSafeInteger(p.count) || p.count <= 0) fail("count must be a positive integer");
   if (p.names.length === 0 || !p.names.every((n) => LABEL.test(n))) fail("names must be bare lowercase labels");
-  if (!Number.isSafeInteger(p.bulletin.transactions) || p.bulletin.transactions <= 0)
-    fail("bulletin.transactions must be a positive integer");
-  if (BigInt(p.bulletin.bytes) <= 0n) fail("bulletin.bytes must be positive");
 }

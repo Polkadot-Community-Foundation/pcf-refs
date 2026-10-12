@@ -2,7 +2,7 @@
  * `npm run dry-run`: executes every leg of the published package on live state with `DryRunApi`. Nothing is
  * submitted. Writes reports/dry-run.{md,json}.
  *
- * 1. Root: the inner batch with Root on Asset Hub, then each forwarded XCM on People and Bulletin.
+ * 1. Root: the inner batch with Root on Asset Hub, then its one XCM on People. No XCM may go anywhere else.
  * 2. Fellowship: the Fellowship proposal with the Fellows origin on Collectives, then its XCM on Asset Hub.
  * 3. Referendum: the preimage with the WhitelistedCaller origin on Asset Hub. Until the whitelist lands this fails
  *    with `CallIsNotWhitelisted`, which shows the origin is accepted.
@@ -12,7 +12,7 @@
  */
 import { Enum, type HexString } from "polkadot-api";
 import { decodeEventLog, type Hex } from "viem";
-import { CHAIN_NAMES, type Chain, type Chains, connect, describeState, PARA, stateOf } from "../lib/chains.ts";
+import { CHAIN_NAMES, type Chains, chainOfPara, connect, describeState, PARA, stateOf } from "../lib/chains.ts";
 import { finish, main, parseCommand } from "../lib/cli.ts";
 import { WHITELIST_ABI } from "../lib/dotns.ts";
 import { eventNames, findEvents, type RuntimeEvent } from "../lib/events.ts";
@@ -20,9 +20,9 @@ import { formatDot, fromHex, sameAccount, sameAddress, toHex, toJson, toSs58 } f
 import { type GovernancePackage, readPackage } from "../lib/package.ts";
 import type { Params } from "../lib/proposal.ts";
 import { Report } from "../lib/report.ts";
-import { siblingLocation, XCM_VERSION } from "../lib/xcm.ts";
+import { paraOf, siblingLocation, XCM_VERSION } from "../lib/xcm.ts";
 
-type DryRunChains = Chains<"assetHub" | "people" | "bulletin" | "collectives">;
+type DryRunChains = Chains<"assetHub" | "people" | "collectives">;
 
 interface Context {
   chains: DryRunChains;
@@ -35,7 +35,7 @@ main(async () => {
   const { proposal, flags } = parseCommand({ submitter: { type: "string" } });
   const params = proposal.params;
   const pkg = readPackage(proposal);
-  const chains = await connect(params.endpoints, ["assetHub", "people", "bulletin", "collectives"]);
+  const chains = await connect(params.endpoints, ["assetHub", "people", "collectives"]);
   const report = new Report();
   const ctx: Context = { chains, pkg, params, report };
 
@@ -62,7 +62,7 @@ main(async () => {
   });
 });
 
-/** Leg 1: the batch with Root on Asset Hub, and its XCMs on their destinations. */
+/** Leg 1: the batch with Root on Asset Hub, and its XCM on People. */
 async function rootLeg({ chains, pkg, params, report }: Context): Promise<void> {
   const ah = chains.assetHub;
   const call = await ah.api.txFromCallData(fromHex(pkg.rootBatch));
@@ -121,62 +121,45 @@ async function rootLeg({ chains, pkg, params, report }: Context): Promise<void> 
     "Asset Hub: DotnsNameWhitelist NameAccepted for every name, to the names owner",
     accepted.map((e) => `${e.args.label}→${e.args.user}`).join(", "),
   );
-  report.check(findEvents(events, "PolkadotXcm", "Sent").length === 2, "Asset Hub: two XCMs sent");
+  const sent = findEvents(events, "PolkadotXcm", "Sent").length;
+  report.check(sent === 1, "Asset Hub: one XCM sent", `${sent} sent`);
   report.info("Asset Hub events", eventNames(events).join(", "));
 
-  // Each forwarded XCM must reach People or Bulletin and produce its effect there.
-  const expected = {
-    [PARA.people]: {
-      chain: chains.people,
-      pallet: "PeopleLite",
-      event: "AttestationAllowanceIncreased",
-      account: params.attester,
-      field: "account",
-    },
-    [PARA.bulletin]: {
-      chain: chains.bulletin,
-      pallet: "TransactionStorage",
-      event: "AuthorizerAdded",
-      account: params.bulletin.authorizer,
-      field: "who",
-    },
-  } as const;
-  const delivered = new Set<number>();
+  // The only forwarded XCM goes to People and grants the allowance there.
+  const toPeople: (typeof forwarded_xcms)[number][1] = [];
+  const elsewhere: string[] = [];
   for (const [destination, messages] of forwarded_xcms) {
-    const para = paraOf(destination);
-    const target = para === undefined ? undefined : expected[para as keyof typeof expected];
-    if (!target || para === undefined) {
-      report.check(false, "forwarded XCM goes to People or Bulletin", toJson(destination));
+    if (paraOf(destination) === PARA.people) toPeople.push(...messages);
+    else elsewhere.push(...messages.map(() => describeLocation(destination)));
+  }
+  report.check(toPeople.length === 1, "Asset Hub: one XCM forwarded to People", `${toPeople.length} forwarded`);
+  report.check(
+    elsewhere.length === 0,
+    "Asset Hub: no XCM forwarded to any other destination",
+    elsewhere.join(", ") || "none",
+  );
+  const people = chains.people;
+  for (const message of toPeople) {
+    const r = await people.api.apis.DryRunApi.dry_run_xcm(siblingLocation(PARA.assetHub), message, { at: people.at });
+    if (!r.success) {
+      report.check(false, "People: XCM dry run", toJson(r.value));
       continue;
     }
-    const name = CHAIN_NAMES[target.chain.key];
-    for (const message of messages) {
-      delivered.add(para);
-      const r = await (target.chain as Chain<"people">).api.apis.DryRunApi.dry_run_xcm(
-        siblingLocation(PARA.assetHub),
-        message,
-        { at: target.chain.at },
-      );
-      if (!r.success) {
-        report.check(false, `${name}: XCM dry run`, toJson(r.value));
-        continue;
-      }
-      const outcome = r.value.execution_result;
-      report.check(outcome.type === "Complete", `${name}: XCM from Asset Hub executes`, toJson(outcome));
-      // A failed Transact still reports Complete, so the effect is asserted from events.
-      const remoteEvents = r.value.emitted_events as RuntimeEvent[];
-      const hit = findEvents<Record<string, string>>(remoteEvents, target.pallet, target.event)[0];
-      const field = hit?.[target.field];
-      report.check(
-        Boolean(field && sameAccount(field, target.account)),
-        `${name}: ${target.pallet}.${target.event}`,
-        toJson(hit),
-      );
-      report.info(`${name} events`, eventNames(remoteEvents).join(", "));
-    }
-  }
-  for (const para of [PARA.people, PARA.bulletin]) {
-    report.check(delivered.has(para), `XCM to ${CHAIN_NAMES[expected[para].chain.key]} forwarded`);
+    const outcome = r.value.execution_result;
+    report.check(outcome.type === "Complete", "People: XCM from Asset Hub executes", toJson(outcome));
+    // A failed Transact still reports Complete, so the effect is asserted from events.
+    const remoteEvents = r.value.emitted_events as RuntimeEvent[];
+    const increased = findEvents<{ account: string; count: number }>(
+      remoteEvents,
+      "PeopleLite",
+      "AttestationAllowanceIncreased",
+    )[0];
+    report.check(
+      Boolean(increased && sameAccount(increased.account, params.attester) && increased.count >= params.count),
+      "People: PeopleLite.AttestationAllowanceIncreased for the attester",
+      toJson(increased),
+    );
+    report.info("People events", eventNames(remoteEvents).join(", "));
   }
 
   // The batch is enacted by the scheduler, so it must fit the scheduler's weight limit.
@@ -311,9 +294,9 @@ async function submissionLeg({ chains, pkg, report }: Context, submitter: string
   if (submitted) report.info("referendum index if submitted at this block", String(submitted.index));
 }
 
-/** Parachain id of a `VersionedLocation` like `{ parents: 1, interior: X1(Parachain(id)) }`. */
-function paraOf(location: { value: unknown }): number | undefined {
-  const interior = (location.value as { interior?: { type: string; value?: { type: string; value: unknown } } })
-    .interior;
-  return interior?.type === "X1" && interior.value?.type === "Parachain" ? (interior.value.value as number) : undefined;
+/** Chain name of a sibling `VersionedLocation`, or the location itself. */
+function describeLocation(location: { value: unknown }): string {
+  const para = paraOf(location);
+  const chain = para === undefined ? undefined : chainOfPara(para);
+  return chain ? CHAIN_NAMES[chain] : toJson(location);
 }
