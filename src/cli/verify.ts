@@ -1,6 +1,6 @@
 /**
- * `npm run verify`: after enactment, checks live state against params.json and reports allowance used and names
- * registered, for the periodic updates. Read-only. Writes reports/state.{md,json}.
+ * `npm run verify`: after enactment, checks live state against params.json and reports allowance used, for the
+ * periodic updates. Read-only. Writes reports/state.{md,json}.
  */
 import { connect, describeState, stateOf } from "../lib/chains.ts";
 import { finish, main, parseCommand } from "../lib/cli.ts";

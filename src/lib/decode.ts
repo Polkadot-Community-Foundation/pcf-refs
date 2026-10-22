@@ -21,13 +21,15 @@ export interface DecodeFacts {
   dispatchedHash?: HexString;
   /** Hash passed to `Whitelist.whitelist_call`. */
   whitelistedHash?: HexString;
+  /** Hashes passed to `Whitelist.remove_whitelisted_call`, in order. */
+  removedHashes: HexString[];
 }
 
 /** Chains the decoder may need, keyed like `ChainKey`. */
 export type DecodeChains = Partial<{ [K in ChainKey]: Chain<K> }>;
 
 export class CallDecoder {
-  readonly facts: DecodeFacts = {};
+  readonly facts: DecodeFacts = { removedHashes: [] };
   private lines: string[] = [];
   private readonly chains: DecodeChains;
 
@@ -74,6 +76,9 @@ export class CallDecoder {
     } else if (pallet === "Whitelist" && name === "whitelist_call") {
       this.facts.whitelistedHash = args.call_hash;
       this.say(depth, `${label}: whitelists call hash \`${args.call_hash}\``);
+    } else if (pallet === "Whitelist" && name === "remove_whitelisted_call") {
+      this.facts.removedHashes.push(args.call_hash);
+      this.say(depth, `${label}: removes call hash \`${args.call_hash}\` from the whitelist`);
     } else if (pallet === "PolkadotXcm" && name === "send") {
       const para: number | undefined = args.dest.value.interior.value?.value;
       const dest = para === undefined ? undefined : chainOfPara(para);

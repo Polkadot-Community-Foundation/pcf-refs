@@ -2,8 +2,8 @@
  * `npm run rehearse`: runs the whole governance sequence on a Chopsticks fork of live Asset Hub, People and Collectives,
  * connected over XCM. Writes reports/rehearsal.{md,json}.
  *
- * 1. The Fellowship referendum enacts on Collectives (scheduled with the Fellows origin) and whitelists the call on
- *    Asset Hub.
+ * 1. The Fellowship referendum enacts on Collectives (scheduled with the Fellows origin): on Asset Hub it removes the
+ *    superseded call hashes from the whitelist and whitelists the call.
  * 2. The Whitelisted Caller referendum enacts on Asset Hub: the preimage is noted and the call is scheduled by Lookup
  *    with the WhitelistedCaller origin, as Referenda does at `At(enactAt)`. Asset Hub sends one XCM, to People.
  * 3. People receives and executes it.
@@ -127,6 +127,11 @@ async function enactFellowshipReferendum(chains: ForkedChains, pkg: GovernancePa
       (await assetHub.api.query.Whitelist.WhitelistedCall.getValue(pkg.rootBatchHash, { at })) !== undefined;
   }
   report.check(whitelisted, "Asset Hub: inner call hash whitelisted", pkg.rootBatchHash);
+  const at = await ahDev.blockHash();
+  for (const hash of pkg.parameters.supersedes) {
+    const still = (await assetHub.api.query.Whitelist.WhitelistedCall.getValue(hash, { at })) !== undefined;
+    report.check(!still, `Asset Hub: superseded call ${hash} removed from the whitelist`);
+  }
 }
 
 /** Step 2: note the preimage and schedule it by Lookup with the WhitelistedCaller origin, as Referenda does. */

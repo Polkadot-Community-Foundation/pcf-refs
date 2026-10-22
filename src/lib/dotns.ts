@@ -1,5 +1,5 @@
 /**
- * The slice of the DotNS contracts the package touches: ABIs, and read-only calls through `ReviveApi.call`.
+ * The slice of the DotNS contracts the commands read or decode: ABIs, and read-only calls through `ReviveApi.call`.
  * Solidity encoding is done with viem.
  */
 import type { HexString } from "polkadot-api";
@@ -9,24 +9,15 @@ import {
   type ContractFunctionName,
   decodeFunctionResult,
   encodeFunctionData,
-  namehash,
   parseAbi,
 } from "viem";
 import type { Chain } from "./chains.ts";
 import { fromHex, toHex, toJson, toSs58 } from "./format.ts";
 
-export const WHITELIST_ABI = parseAbi([
-  "function grantNames(string[] labels, address user)",
-  "function statusOf(string label) view returns (uint8)",
-  "function granteeOf(string label) view returns (address)",
-  "function maxGrantBatch() view returns (uint16)",
-  "event NameAccepted(bytes32 indexed node, address indexed user, string label)",
-]);
-export const CONTROLLER_ABI = parseAbi(["function available(string label) view returns (bool)"]);
-export const REGISTRAR_ABI = parseAbi(["function ownerOf(uint256 id) view returns (address)"]);
-
-/** `IDotnsNameWhitelist.NameStatus`, by ordinal. */
-export const NAME_STATUS = ["Open", "Reserved", "Claimed"] as const;
+/** Name whitelist calls the decoder recognises in `Revive.call` calldata. */
+export const WHITELIST_ABI = parseAbi(["function grantNames(string[] labels, address user)"]);
+/** The dispatcher is an upgradeable proxy; its owner can upgrade it. */
+export const OWNABLE_ABI = parseAbi(["function owner() view returns (address)"]);
 
 /** ERC-1967 implementation slot of an upgradeable proxy. */
 const ERC1967_IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
@@ -67,6 +58,3 @@ export async function implementationOf(ah: Chain<"assetHub">, proxy: HexString):
   if (!slot.success || !slot.value) return undefined;
   return `0x${toHex(slot.value).slice(-40)}`;
 }
-
-/** ERC-721 token id of `<label>.dot` in the DotNS registrar. */
-export const tokenIdOf = (label: string): bigint => BigInt(namehash(`${label}.dot`));

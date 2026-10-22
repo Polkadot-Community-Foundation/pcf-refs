@@ -46,9 +46,11 @@ main(async () => {
 
     const fellowshipTree = await decoder.render("collectives", pkg.fellowship.submit);
     expect("Fellowship whitelist hash", decoder.facts.whitelistedHash, innerHash);
+    const removed = decoder.facts.removedHashes;
+    expect("Fellowship removed hashes", removed.join(", "), pkg.parameters.supersedes.join(", "));
 
     const submitTree = await decoder.render("assetHub", pkg.submission.referendaSubmit);
-    const d = pkg.deadlines;
+    const t = pkg.timing;
 
     const md = [
       `# ${pkg.title}: decoded calls`,
@@ -69,12 +71,18 @@ main(async () => {
       "## Fellowship referendum (Collectives, Fellows origin)",
       "",
       `Whitelists exactly the inner call hash above: ${decoder.facts.whitelistedHash === innerHash ? "yes" : "**NO**"}.`,
+      ...(removed.length
+        ? [
+            "",
+            `Removes from the whitelist, in the same batch, the inner call hash${removed.length > 1 ? "es" : ""} it supersedes: ${removed.map((h) => `\`${h}\``).join(", ")}.`,
+          ]
+        : []),
       "",
       ...fellowshipTree,
       "",
       "## Referendum submission (Asset Hub)",
       "",
-      `Enactment is fixed at relay block ${d.enactAt}. The Fellowship referendum must be submitted by relay block ${d.fellowshipSubmitBy} and the whitelist must be on Asset Hub by relay block ${d.whitelistLandedBy}.`,
+      `The referendum enacts from relay block ${t.enactAt}. A Fellowship referendum proposed before relay block ${t.fellowshipProposedBy} whitelists the call before then.`,
       "",
       ...submitTree,
       "",

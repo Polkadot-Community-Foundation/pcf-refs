@@ -24,12 +24,12 @@ main(async () => {
   }
 
   writeFileSync(file, json);
-  const d = pkg.deadlines;
+  const t = pkg.timing;
   console.log(`runtimes         ${describeRuntimes(pkg.runtimes)}`);
   console.log(`rootBatchHash    ${pkg.rootBatchHash}  (${pkg.rootBatchLen} B, whitelisted by the Fellowship)`);
   console.log(`refPreimageHash  ${pkg.refPreimageHash}  (${pkg.refPreimageLen} B, looked up by the referendum)`);
   console.log(
-    `deadlines        Fellowship ref by relay #${d.fellowshipSubmitBy}, whitelist by #${d.whitelistLandedBy}, enactment #${d.enactAt}`,
+    `timing           Fellowship ref proposed before relay #${t.fellowshipProposedBy}, enactment from #${t.enactAt}`,
   );
   console.log(`wrote ${file}`);
   return 0;

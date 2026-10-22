@@ -3,7 +3,8 @@
  * submitted. Writes reports/dry-run.{md,json}.
  *
  * 1. Root: the inner batch with Root on Asset Hub, then its one XCM on People. No XCM may go anywhere else.
- * 2. Fellowship: the Fellowship proposal with the Fellows origin on Collectives, then its XCM on Asset Hub.
+ * 2. Fellowship: the Fellowship proposal with the Fellows origin on Collectives, then its XCM on Asset Hub, which
+ *    removes every superseded call hash from the whitelist and whitelists the inner call.
  * 3. Referendum: the preimage with the WhitelistedCaller origin on Asset Hub. Until the whitelist lands this fails
  *    with `CallIsNotWhitelisted`, which shows the origin is accepted.
  * 4. Submission (with a submitter): `note_preimage` + `Referenda.submit`, to show the deposits held.
@@ -11,12 +12,10 @@
  *   --submitter <ss58>   account for leg 4; defaults to params.submitter
  */
 import { Enum, type HexString } from "polkadot-api";
-import { decodeEventLog, type Hex } from "viem";
 import { CHAIN_NAMES, type Chains, chainOfPara, connect, describeState, PARA, stateOf } from "../lib/chains.ts";
 import { finish, main, parseCommand } from "../lib/cli.ts";
-import { WHITELIST_ABI } from "../lib/dotns.ts";
 import { eventNames, findEvents, type RuntimeEvent } from "../lib/events.ts";
-import { formatDot, fromHex, sameAccount, sameAddress, toHex, toJson, toSs58 } from "../lib/format.ts";
+import { formatDot, fromHex, sameAccount, sameAddress, toJson, toSs58 } from "../lib/format.ts";
 import { type GovernancePackage, readPackage } from "../lib/package.ts";
 import type { Params } from "../lib/proposal.ts";
 import { Report } from "../lib/report.ts";
@@ -97,30 +96,6 @@ async function rootLeg({ chains, pkg, params, report }: Context): Promise<void> 
     "Asset Hub: DotnsGateway.DispatcherAddressSet to the dispatcher",
     toJson(dispatcher),
   );
-
-  const accepted = findEvents<{ contract: HexString; data: Uint8Array; topics: HexString[] }>(
-    events,
-    "Revive",
-    "ContractEmitted",
-  )
-    .filter((e) => sameAddress(e.contract, params.dotns.nameWhitelist))
-    .flatMap((e) => {
-      try {
-        return [
-          decodeEventLog({ abi: WHITELIST_ABI, data: toHex(e.data) as Hex, topics: e.topics as [Hex, ...Hex[]] }),
-        ];
-      } catch {
-        return [];
-      }
-    })
-    .filter((e) => e.eventName === "NameAccepted");
-  report.check(
-    params.names.every((label) =>
-      accepted.some((e) => e.args.label === label && sameAddress(e.args.user, params.namesOwner)),
-    ),
-    "Asset Hub: DotnsNameWhitelist NameAccepted for every name, to the names owner",
-    accepted.map((e) => `${e.args.label}→${e.args.user}`).join(", "),
-  );
   const sent = findEvents(events, "PolkadotXcm", "Sent").length;
   report.check(sent === 1, "Asset Hub: one XCM sent", `${sent} sent`);
   report.info("Asset Hub events", eventNames(events).join(", "));
@@ -176,7 +151,7 @@ async function rootLeg({ chains, pkg, params, report }: Context): Promise<void> 
 }
 
 /** Leg 2: the Fellowship proposal with the Fellows origin, then its whitelist XCM on Asset Hub. */
-async function fellowshipLeg({ chains, pkg, report }: Context): Promise<void> {
+async function fellowshipLeg({ chains, pkg, params, report }: Context): Promise<void> {
   const { collectives, assetHub: ah } = chains;
   const call = await collectives.api.txFromCallData(fromHex(pkg.fellowship.xcmToAssetHub));
   const result = await collectives.api.apis.DryRunApi.dry_run_call(
@@ -208,16 +183,23 @@ async function fellowshipLeg({ chains, pkg, report }: Context): Promise<void> {
       report.check(false, "Asset Hub: whitelist XCM dry run", toJson(r.value));
       continue;
     }
-    const whitelisted = findEvents<{ call_hash: HexString }>(
-      r.value.emitted_events as RuntimeEvent[],
-      "Whitelist",
-      "CallWhitelisted",
-    )[0];
+    const events = r.value.emitted_events as RuntimeEvent[];
+    const whitelisted = findEvents<{ call_hash: HexString }>(events, "Whitelist", "CallWhitelisted")[0];
     report.check(
       r.value.execution_result.type === "Complete" && whitelisted?.call_hash === pkg.rootBatchHash,
       "Asset Hub: Whitelist.CallWhitelisted for the inner call hash",
       toJson(whitelisted ?? r.value.execution_result),
     );
+    const removed = findEvents<{ call_hash: HexString }>(events, "Whitelist", "WhitelistedCallRemoved").map(
+      (e) => e.call_hash,
+    );
+    for (const hash of params.supersedes) {
+      report.check(
+        removed.includes(hash),
+        `Asset Hub: Whitelist.WhitelistedCallRemoved for superseded call ${hash}`,
+        removed.join(", ") || "none removed",
+      );
+    }
   }
 }
 

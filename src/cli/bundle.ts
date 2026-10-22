@@ -76,10 +76,10 @@ function releaseNotes(
   pkg: ReturnType<typeof readPackage>,
   logs: (readonly [string, ReportLog])[],
 ): string {
-  const d = pkg.deadlines;
+  const t = pkg.timing;
   const dir = `proposals/${name}`;
   const preflight = logs.find(([report]) => report === "preflight")?.[1].state;
-  const utc = preflight?.deadlinesUtc as Record<keyof typeof d, string> | undefined;
+  const utc = preflight?.timingUtc as Record<keyof typeof t, string> | undefined;
   const estimatedFrom = (preflight?.relay as { block?: number } | undefined)?.block;
   const outcomes = logs.map(([report, log]) => {
     const blocks = Object.entries(log.state)
@@ -102,17 +102,24 @@ function releaseNotes(
     `| Inner call, whitelisted by the Fellowship | \`${pkg.rootBatchHash}\` | ${pkg.rootBatchLen} bytes |`,
     `| Referendum preimage, looked up by the Whitelisted Caller referendum | \`${pkg.refPreimageHash}\` | ${pkg.refPreimageLen} bytes |`,
     "",
+    ...(pkg.parameters.supersedes.length
+      ? [
+          `Supersedes ${pkg.parameters.supersedes.map((h) => `\`${h}\``).join(", ")}: the Fellowship referendum removes it from the Asset Hub whitelist in the same batch that whitelists the inner call above.`,
+          "",
+        ]
+      : []),
     `Encoded for runtimes ${describeRuntimes(pkg.runtimes)}.`,
     "",
-    "## Deadlines",
+    "## Timing",
+    "",
+    `If the Fellowship referendum is proposed, with its decision deposit, before relay block ${t.fellowshipProposedBy}, its whitelist reaches Asset Hub before relay block ${t.enactAt}. The Whitelisted Caller referendum can then enact from relay block ${t.enactAt} until its decision period ends: at that block if it is approved by then, otherwise shortly after its approval.`,
     "",
     `Relay blocks are binding. Dates are estimates at 6 s per block from the preflight run${estimatedFrom ? ` at relay #${estimatedFrom}` : ""}.`,
     "",
     "| | Relay block | Estimated (UTC) |",
     "|---|---|---|",
-    `| Fellowship referendum submitted, with its decision deposit, by | ${d.fellowshipSubmitBy} | ${utc?.fellowshipSubmitBy ?? "n/a"} |`,
-    `| Whitelist on Asset Hub by (cutoff) | ${d.whitelistLandedBy} | ${utc?.whitelistLandedBy ?? "n/a"} |`,
-    `| Whitelisted Caller referendum enacts at | ${d.enactAt} | ${utc?.enactAt ?? "n/a"} |`,
+    `| Fellowship referendum proposed before | ${t.fellowshipProposedBy} | ${utc?.fellowshipProposedBy ?? "n/a"} |`,
+    `| Whitelisted Caller referendum can enact from | ${t.enactAt} | ${utc?.enactAt ?? "n/a"} |`,
     "",
     "## Dry-run outcomes",
     "",
@@ -127,7 +134,7 @@ function releaseNotes(
     "| File | Content |",
     "|---|---|",
     ...CALL_DATA.map(([file, , what]) => `| \`${file}\` | ${what} |`),
-    "| `calls.json` | every encoded call, both hashes and the deadlines |",
+    "| `calls.json` | every encoded call, both hashes and the timing |",
     "| `params.json` | the inputs |",
     "| `BREAKDOWN.md` | the call data decoded against live metadata |",
     "| `reports/` | preflight, dry-run and rehearsal reports (`.md`), logs (`.json`) and console output (`.log`) |",

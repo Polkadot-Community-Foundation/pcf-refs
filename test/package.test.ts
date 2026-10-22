@@ -46,6 +46,10 @@ describe("buildPackage", () => {
         "Fellowship whitelists the batch hash",
       );
       assert.ok(
+        published.fellowship.xcmToAssetHub.includes(published.fellowship.assetHubCall.slice(2)),
+        "Fellowship XCM carries the Asset Hub call",
+      );
+      assert.ok(
         published.submission.referendaSubmit.includes(published.refPreimageHash.slice(2)),
         "referendum looks up the preimage",
       );
@@ -87,16 +91,11 @@ describe(`${DEFAULT_PROPOSAL} inner call`, () => {
     ["committed in calls.json", async () => published.rootBatch, skip],
   ] as const;
   for (const [what, rootBatch, skipBatch] of batches) {
-    it(`${what}: batches exactly the four onboarding calls, in order`, { skip: skipBatch }, async () => {
+    it(`${what}: batches exactly the three onboarding calls, in order`, { skip: skipBatch }, async () => {
       const calls = decodeBatch(await rootBatch());
       assert.deepEqual(
         calls.map((c) => `${c.type}.${c.value.type}`),
-        [
-          "DotnsGateway.increase_attestation_allowance",
-          "DotnsGateway.set_dispatcher_address",
-          "PolkadotXcm.send",
-          "Revive.call",
-        ],
+        ["DotnsGateway.increase_attestation_allowance", "DotnsGateway.set_dispatcher_address", "PolkadotXcm.send"],
       );
     });
 
@@ -123,4 +122,26 @@ describe(`${DEFAULT_PROPOSAL} inner call`, () => {
       });
     });
   }
+});
+
+describe(`${DEFAULT_PROPOSAL} Fellowship call`, () => {
+  const { published } = proposals.find((p) => p.dir === DEFAULT_PROPOSAL) ?? assert.fail(DEFAULT_PROPOSAL);
+  const params = requirePinned(loadProposal(DEFAULT_PROPOSAL).params);
+
+  it("removes every superseded call hash from the whitelist, then whitelists the inner call", async () => {
+    const { index, args } = splitCall(fromHex(published.fellowship.assetHubCall));
+    assert.equal(index, splitCall(ah.tx.Utility.batch_all({ calls: [] }).encodedData).index, "Utility.batch_all");
+    const calls = ahCodecs.tx.Utility.batch_all.dec(args).calls as unknown as DecodedCall[];
+    assert.deepEqual(
+      calls.map((c) => [`${c.type}.${c.value.type}`, c.value.value.call_hash]),
+      [
+        ...params.supersedes.map((hash) => ["Whitelist.remove_whitelisted_call", hash]),
+        ["Whitelist.whitelist_call", published.rootBatchHash],
+      ],
+    );
+  });
+
+  it("supersedes version 2", () => {
+    assert.deepEqual(params.supersedes, ["0x90640a174e1d62b5645f31cb053d562e95a63881fd1e0f9197edbbcf83e21fad"]);
+  });
 });
