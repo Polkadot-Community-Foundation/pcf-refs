@@ -5,25 +5,21 @@
  *   Root.
  * - The referendum preimage is `Whitelist.dispatch_whitelisted_call_with_preimage(inner)`, submitted on the Asset Hub
  *   Whitelisted Caller track with a fixed `At(enactAt)` enactment.
- * - The Fellowship referendum on Collectives (Fellows origin) sends `Whitelist.whitelist_call(hash)` to Asset Hub.
+ * - The Fellowship referendum on Collectives (Fellows origin) sends `Whitelist.whitelist_call(hash)` to Asset Hub,
+ *   batched after a `Whitelist.remove_whitelisted_call` for each inner call hash the package supersedes.
  *
  * Encoding is offline, from the metadata committed in `.papi/`. The package is therefore a pure function of the
  * pinned params and the runtimes those descriptors describe, and anyone can reproduce it byte for byte.
  */
 import { readFileSync } from "node:fs";
 import { Enum, getOfflineApi, type HexString, type SS58String } from "polkadot-api";
-import { encodeFunctionData } from "viem";
 import { BLOCKS_PER_DAY, CHAIN_NAMES, descriptors, PARA } from "./chains.ts";
-import { WHITELIST_ABI } from "./dotns.ts";
 import { blake2, byteLength, fromHex, toHex, toSs58 } from "./format.ts";
 import type { PinnedParams, Proposal } from "./proposal.ts";
 import { siblingLocation, unpaidTransact } from "./xcm.ts";
 
-/** Both referenda are assumed to decide within 7 days of their decision deposits; the rest is margin for the whitelist. */
-const DECISION_DAYS = 7;
-/** The whitelist must be on Asset Hub this long before the referendum enacts. */
-const WHITELIST_LEAD_DAYS = 1;
-const FELLOWSHIP_LEAD_DAYS = DECISION_DAYS + WHITELIST_LEAD_DAYS;
+/** The Fellowship decision period is about 7 days from the decision deposit; one more day is margin for the whitelist. */
+const FELLOWSHIP_LEAD_DAYS = 7 + 1;
 /** Enactment delay of the Fellowship referendum, in Collectives blocks. */
 const FELLOWSHIP_ENACTMENT_AFTER = 10;
 
@@ -36,20 +32,17 @@ export interface GovernancePackage {
     attester: SS58String;
     count: number;
     dispatcher: HexString;
-    names: string[];
-    namesOwner: HexString;
-    nameWhitelist: HexString;
+    supersedes: HexString[];
   };
-  /** Relay block numbers. */
-  deadlines: { enactAt: number; fellowshipSubmitBy: number; whitelistLandedBy: number };
+  /** Relay block numbers. A Fellowship referendum proposed before `fellowshipProposedBy` whitelists the call before
+   * `enactAt`, the earliest block the Whitelisted Caller referendum enacts at. */
+  timing: { enactAt: number; fellowshipProposedBy: number };
   /** Each call of the batch, and the calls it carries to other chains. */
   inner: {
     assetHubAllowance: HexString;
     assetHubDispatcher: HexString;
     peopleAllowance: HexString;
     assetHubXcmToPeople: HexString;
-    grantNamesCalldata: HexString;
-    assetHubGrantNames: HexString;
   };
   /** The batch: what the Fellowship whitelists and what executes with Root. */
   rootBatch: HexString;
@@ -59,7 +52,16 @@ export interface GovernancePackage {
   refPreimage: HexString;
   refPreimageLen: number;
   refPreimageHash: HexString;
-  fellowship: { whitelistCall: HexString; xcmToAssetHub: HexString; submit: HexString };
+  fellowship: {
+    /** `Whitelist.remove_whitelisted_call` for each superseded inner call hash. */
+    removeWhitelistedCalls: HexString[];
+    whitelistCall: HexString;
+    /** What the Fellowship's XCM executes on Asset Hub: the removals and the whitelist in one `Utility.batch_all`, or
+     * the whitelist alone when nothing is superseded. */
+    assetHubCall: HexString;
+    xcmToAssetHub: HexString;
+    submit: HexString;
+  };
   submission: { notePreimage: HexString; referendaSubmit: HexString };
 }
 
@@ -73,11 +75,6 @@ export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> 
 
   // Call executed on People, carried by XCM.
   const peopleAllowance = people.tx.PeopleLite.increase_attestation_allowance({ account: attester, count: p.count });
-  const grantNamesCalldata = encodeFunctionData({
-    abi: WHITELIST_ABI,
-    functionName: "grantNames",
-    args: [p.names, p.namesOwner],
-  });
 
   const calls = {
     assetHubAllowance: ah.tx.DotnsGateway.increase_attestation_allowance({ account: attester, count: p.count }),
@@ -86,20 +83,12 @@ export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> 
       dest: siblingLocation(PARA.people),
       message: unpaidTransact(peopleAllowance.encodedData, "Superuser"),
     }),
-    assetHubGrantNames: ah.tx.Revive.call({
-      dest: p.dotns.nameWhitelist,
-      value: 0n,
-      weight_limit: { ref_time: BigInt(p.grantWeight.refTime), proof_size: BigInt(p.grantWeight.proofSize) },
-      storage_deposit_limit: BigInt(p.grantStorageDepositLimit),
-      data: fromHex(grantNamesCalldata),
-    }),
   };
   const batch = ah.tx.Utility.batch_all({
     calls: [
       calls.assetHubAllowance.decodedCall,
       calls.assetHubDispatcher.decodedCall,
       calls.assetHubXcmToPeople.decodedCall,
-      calls.assetHubGrantNames.decodedCall,
     ],
   });
   const rootBatch = toHex(batch.encodedData);
@@ -110,10 +99,15 @@ export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> 
   );
   const refPreimageHash = blake2(refPreimage);
 
-  const whitelistCall = ah.tx.Whitelist.whitelist_call({ call_hash: rootBatchHash }).encodedData;
+  const removeWhitelisted = p.supersedes.map((call_hash) => ah.tx.Whitelist.remove_whitelisted_call({ call_hash }));
+  const whitelist = ah.tx.Whitelist.whitelist_call({ call_hash: rootBatchHash });
+  const assetHubCall = removeWhitelisted.length
+    ? ah.tx.Utility.batch_all({ calls: [...removeWhitelisted.map((c) => c.decodedCall), whitelist.decodedCall] })
+        .encodedData
+    : whitelist.encodedData;
   const fellowshipXcm = collectives.tx.PolkadotXcm.send({
     dest: siblingLocation(PARA.assetHub),
-    message: unpaidTransact(whitelistCall, "Xcm"),
+    message: unpaidTransact(assetHubCall, "Xcm"),
   }).encodedData;
   const fellowshipSubmit = collectives.tx.FellowshipReferenda.submit({
     proposal_origin: Enum("FellowshipOrigins", Enum("Fellows")),
@@ -139,22 +133,17 @@ export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> 
       attester,
       count: p.count,
       dispatcher: p.dispatcher,
-      names: p.names,
-      namesOwner: p.namesOwner,
-      nameWhitelist: p.dotns.nameWhitelist,
+      supersedes: p.supersedes,
     },
-    deadlines: {
+    timing: {
       enactAt: p.enactAt,
-      fellowshipSubmitBy: p.enactAt - FELLOWSHIP_LEAD_DAYS * BLOCKS_PER_DAY,
-      whitelistLandedBy: p.enactAt - WHITELIST_LEAD_DAYS * BLOCKS_PER_DAY,
+      fellowshipProposedBy: p.enactAt - FELLOWSHIP_LEAD_DAYS * BLOCKS_PER_DAY,
     },
     inner: {
       assetHubAllowance: toHex(calls.assetHubAllowance.encodedData),
       assetHubDispatcher: toHex(calls.assetHubDispatcher.encodedData),
       peopleAllowance: toHex(peopleAllowance.encodedData),
       assetHubXcmToPeople: toHex(calls.assetHubXcmToPeople.encodedData),
-      grantNamesCalldata,
-      assetHubGrantNames: toHex(calls.assetHubGrantNames.encodedData),
     },
     rootBatch,
     rootBatchLen: byteLength(rootBatch),
@@ -163,7 +152,9 @@ export async function buildPackage(p: PinnedParams): Promise<GovernancePackage> 
     refPreimageLen: byteLength(refPreimage),
     refPreimageHash,
     fellowship: {
-      whitelistCall: toHex(whitelistCall),
+      removeWhitelistedCalls: removeWhitelisted.map((c) => toHex(c.encodedData)),
+      whitelistCall: toHex(whitelist.encodedData),
+      assetHubCall: toHex(assetHubCall),
       xcmToAssetHub: toHex(fellowshipXcm),
       submit: toHex(fellowshipSubmit),
     },

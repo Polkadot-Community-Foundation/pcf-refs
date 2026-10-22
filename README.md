@@ -20,7 +20,7 @@ call data and hashes published here.
 
 | Proposal | Summary | Chains changed | Governance route | Status | Releases |
 |---|---|---|---|---|---|
-| [`app-onboarding`](proposals/app-onboarding/README.md) | Attestation allowances, the dotNS dispatcher and three app names, so Polkadot App users can complete onboarding | Asset Hub, People | Fellowship whitelist, then Whitelisted Caller | Version 2 under discussion on the [forum](https://forum.polkadot.network/t/final-steps-for-dotdao-to-enable-user-onboarding-via-polkadot-app/18937) | [`app-onboarding/v2-rc2`](https://github.com/Polkadot-Community-Foundation/pcf-refs/releases/tag/app-onboarding/v2-rc2) (current); [`app-onboarding/v1-rc1`](https://github.com/Polkadot-Community-Foundation/pcf-refs/releases/tag/app-onboarding/v1-rc1) (earlier five-call version, superseded) |
+| [`app-onboarding`](proposals/app-onboarding/README.md) | Attestation allowances and the dotNS dispatcher, so Polkadot App users can complete onboarding | Asset Hub, People | Fellowship whitelist, then Whitelisted Caller | Version 3, discussed on the [forum](https://forum.polkadot.network/t/final-steps-for-dotdao-to-enable-user-onboarding-via-polkadot-app/18937) | [`app-onboarding/v3-rc1`](https://github.com/Polkadot-Community-Foundation/pcf-refs/releases/tag/app-onboarding/v3-rc1) (current, pre-release); [`app-onboarding/v2`](https://github.com/Polkadot-Community-Foundation/pcf-refs/releases/tag/app-onboarding/v2) (earlier four-call version with three names, superseded); [`app-onboarding/v1-rc1`](https://github.com/Polkadot-Community-Foundation/pcf-refs/releases/tag/app-onboarding/v1-rc1) (earlier five-call version, superseded) |
 
 ## Verify a proposal
 
@@ -56,8 +56,8 @@ Each proposal lives in `proposals/<name>/`:
 | File | Committed | Content |
 |---|---|---|
 | `README.md` | yes | what the proposal asks for and why, each call, the governance route and how to verify it |
-| `params.json` | yes | the only input: addresses, amounts, names, enactment block, RPC endpoints |
-| `calls.json` | yes | every encoded call, both hashes and the deadlines |
+| `params.json` | yes | the only input: addresses, amounts, enactment block, RPC endpoints |
+| `calls.json` | yes | every encoded call, both hashes and the timing |
 | `BREAKDOWN.md` | yes | the call data decoded call by call against live metadata |
 | `reports/` | no | reports (`.md`), logs (`.json`) and console output (`.log`) of the online commands; published by CI and in releases |
 
@@ -71,7 +71,7 @@ every check on a clean runner and publishes, only if every check passed:
   `fellowship-submit.hex`), with `calls.json`, `params.json` and `BREAKDOWN.md`;
 - the preflight, dry-run and rehearsal reports, with their JSON logs and console output;
 - a tarball of all of it with `SHA256SUMS` and `RELEASE_NOTES.md`, and release notes listing both hashes, the
-  deadlines and the outcome of each report.
+  timing and the outcome of each report.
 
 ### Verify a release
 
@@ -124,7 +124,7 @@ npm ci
 | `npm run pin` | relay | Fills a `null` `enactAt` (relay block now + `enactInDays`) in `params.json`. A value already set is kept. |
 | `npm run encode` | none | Encodes the package into `calls.json`. `-- --check` compares instead of writing. |
 | `npm run decode` | Asset Hub, People, Collectives (`--hex` also Bulletin) | Decodes `calls.json` against live metadata into `BREAKDOWN.md`, following each XCM `Transact` into the destination chain and the Revive calldata into the dotNS ABI. Recomputes every hash and fails on a mismatch. `-- --hex <call> --chain <assetHub\|collectives\|people\|bulletin>` decodes any call. |
-| `npm run preflight` | relay, Asset Hub, People, Collectives | Read-only checks of live state before publication: runtimes unchanged, targets in their expected starting state, contracts deployed (with code hashes), XCM routes open, deadlines reachable (with estimated UTC dates, which the release notes repeat). It also reports the balance of each account involved. |
+| `npm run preflight` | relay, Asset Hub, People, Collectives | Read-only checks of live state before publication: runtimes unchanged, targets in their expected starting state, contracts deployed (with code hashes), XCM routes open, enactment block ahead (with estimated UTC dates, which the release notes repeat). It also reports the balance of each account involved. |
 | `npm run dry-run` | Asset Hub, People, Collectives | `DryRunApi` on live state: every call with the origin it will have once enacted, including the XCMs it sends, executed on their destination chains; the Fellowship proposal with the Fellows origin; the preimage with the Whitelisted Caller origin. With `-- --submitter <ss58>` or `params.submitter`, also `note_preimage` + `Referenda.submit`, to show the deposits. |
 | `npm run rehearse` | Asset Hub, People, Collectives, on a local fork | Forks the chains with Chopsticks, enacts both referenda through the scheduler with their real origins, delivers the XCMs, and reads the state the proposal changes before and after enactment. Then it runs the post-enactment checks. Voting is not simulated. `-- --port-base <n>` (default 8100), `-- --keep`. |
 | `npm run verify` | Asset Hub, People | After enactment: live state against `params.json`, so anyone can track usage after enactment. |
@@ -140,7 +140,7 @@ The checks each command runs for a proposal are listed in that proposal's README
 ### Preparing a release
 
 1. Pin the enactment block: set `enactAt` to `null`, then `npm run pin && npm run encode && npm run decode`. Pinning
-   changes `Referenda.submit` and the deadlines, so pin once, open a pull request, and tag the merge commit.
+   changes `Referenda.submit` and the timing, so pin once, open a pull request, and tag the merge commit.
 2. Tag it with the next unused version (tag format in [Releases](#releases)) and push the tag.
 
 ### When a runtime upgrades

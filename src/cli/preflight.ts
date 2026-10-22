@@ -2,24 +2,19 @@
  * `npm run preflight`: read-only checks of live state before publishing. Writes reports/preflight.{md,json}.
  *
  * - the live runtimes are the ones calls.json was encoded for
- * - the attester allowances are empty and the names are Open and unregistered; the current dispatcher is reported
- * - the addresses are what params.json says: contracts deployed (with code hashes), names owner mapped to its account
+ * - the attester allowances are empty; the current dispatcher is reported
+ * - the dispatcher is a contract (with code hashes), and its owner is reported with the account behind it
  * - the XCM route from Asset Hub to People is open
- * - the deadlines are still reachable, and the governance state of the package (whitelisted, preimage noted)
+ * - the enactment block is ahead, how long remains to propose the Fellowship referendum, and the governance state of
+ *   the package (whitelisted, preimage noted)
+ * - every superseded call hash is still whitelisted, since the Fellowship batch removes it and fails otherwise
  *
  * It also lists the proxies and balances of every account involved, for the forum post.
  */
 import type { SS58String } from "polkadot-api";
 import { BLOCKS_PER_DAY, type Chain, connect, describeState, PARA, stateOf } from "../lib/chains.ts";
 import { finish, main, parseCommand } from "../lib/cli.ts";
-import {
-  CONTROLLER_ABI,
-  codeHashOf,
-  implementationOf,
-  NAME_STATUS,
-  readContract,
-  WHITELIST_ABI,
-} from "../lib/dotns.ts";
+import { codeHashOf, implementationOf, OWNABLE_ABI, readContract } from "../lib/dotns.ts";
 import { formatDot, toSs58 } from "../lib/format.ts";
 import { type GovernancePackage, readPackage } from "../lib/package.ts";
 import { Report } from "../lib/report.ts";
@@ -33,7 +28,7 @@ main(async () => {
   const report = new Report();
   const attester = toSs58(p.attester);
   const daysFromNow = (block: number, now: number) => `${((block - now) / BLOCKS_PER_DAY).toFixed(1)} days from now`;
-  let deadlinesUtc: Record<keyof GovernancePackage["deadlines"], string> | undefined;
+  let timingUtc: Record<keyof GovernancePackage["timing"], string> | undefined;
 
   try {
     // Runtimes: the published bytes are only valid for these.
@@ -66,33 +61,12 @@ main(async () => {
         `${implementation} code hash ${await codeHashOf(ah, implementation)}`,
       );
     }
-    report.check(
-      Boolean(await codeHashOf(ah, p.dotns.nameWhitelist)),
-      "DotnsNameWhitelist is a contract",
-      p.dotns.nameWhitelist,
-    );
 
-    // Names: Open on the whitelist, unregistered, within one grant batch.
-    const maxBatch = await readContract(ah, p.dotns.nameWhitelist, WHITELIST_ABI, "maxGrantBatch", []);
-    report.check(p.names.length <= maxBatch, "grant batch within maxGrantBatch", `${p.names.length} ≤ ${maxBatch}`);
-    for (const label of p.names) {
-      const status = NAME_STATUS[await readContract(ah, p.dotns.nameWhitelist, WHITELIST_ABI, "statusOf", [label])];
-      const available = await readContract(ah, p.dotns.registrarController, CONTROLLER_ABI, "available", [label]);
-      report.check(
-        status === "Open" && available,
-        `${label}.dot is Open on the whitelist and unregistered`,
-        `status ${status}, available ${available}`,
-      );
-    }
-
-    // Accounts: who controls each of them.
-    const namesOwnerAccount = await ah.api.query.Revive.OriginalAccount.getValue(p.namesOwner, { at: ah.at });
-    report.check(
-      Boolean(namesOwnerAccount),
-      "names owner H160 is a mapped substrate account",
-      namesOwnerAccount ? `${p.namesOwner} → ${namesOwnerAccount}` : `${p.namesOwner} unmapped`,
-    );
-    if (namesOwnerAccount) report.info("names owner proxies (Asset Hub)", await proxiesOf(ah, namesOwnerAccount));
+    // Accounts: who controls each of them. The dispatcher owner can upgrade it.
+    const owner = await readContract(ah, p.dispatcher, OWNABLE_ABI, "owner", []);
+    const ownerAccount = await ah.api.query.Revive.OriginalAccount.getValue(owner, { at: ah.at });
+    report.info("dispatcher owner", ownerAccount ? `${owner} → ${ownerAccount}` : `${owner} (unmapped)`);
+    if (ownerAccount) report.info("dispatcher owner proxies (Asset Hub)", await proxiesOf(ah, ownerAccount));
     report.info("attester proxies (Asset Hub)", await proxiesOf(ah, attester));
     report.info("attester proxies (People)", await proxiesOf(people, attester));
     report.info(
@@ -111,33 +85,31 @@ main(async () => {
       channel ? `max message ${channel.max_message_size} B` : "missing",
     );
 
-    // Governance state of this package, and deadlines.
+    // Governance state of this package, and timing.
     const whitelisted = await ah.api.query.Whitelist.WhitelistedCall.getValue(pkg.rootBatchHash, { at: ah.at });
     report.info("inner call whitelisted on Asset Hub", whitelisted === undefined ? "not yet" : "yes");
+    for (const hash of p.supersedes) {
+      const still = await ah.api.query.Whitelist.WhitelistedCall.getValue(hash, { at: ah.at });
+      report.check(
+        still !== undefined,
+        `superseded call ${hash} still whitelisted on Asset Hub`,
+        still === undefined ? "no" : "yes",
+      );
+    }
     const preimage = await ah.api.query.Preimage.RequestStatusFor.getValue(pkg.refPreimageHash, { at: ah.at });
     report.info("referendum preimage noted on Asset Hub", preimage ? preimage.type : "not yet");
-    const d = pkg.deadlines;
+    const t = pkg.timing;
     const now = Number(await relay.api.query.Timestamp.Now.getValue({ at: relay.at }));
     const utc = (block: number) => estimateUtc(now, block - relay.block);
-    deadlinesUtc = {
-      fellowshipSubmitBy: utc(d.fellowshipSubmitBy),
-      whitelistLandedBy: utc(d.whitelistLandedBy),
-      enactAt: utc(d.enactAt),
-    };
-    report.check(
-      d.fellowshipSubmitBy > relay.block,
-      "Fellowship submission deadline not passed",
-      `relay #${d.fellowshipSubmitBy}, ≈ ${deadlinesUtc.fellowshipSubmitBy}, ${daysFromNow(d.fellowshipSubmitBy, relay.block)}`,
+    timingUtc = { fellowshipProposedBy: utc(t.fellowshipProposedBy), enactAt: utc(t.enactAt) };
+    report.info(
+      "Fellowship referendum proposed before this block whitelists the call before enactment",
+      `relay #${t.fellowshipProposedBy}, ≈ ${timingUtc.fellowshipProposedBy}, ${daysFromNow(t.fellowshipProposedBy, relay.block)}`,
     );
     report.check(
-      d.whitelistLandedBy > relay.block,
-      "whitelist cutoff not passed",
-      `relay #${d.whitelistLandedBy}, ≈ ${deadlinesUtc.whitelistLandedBy}, ${daysFromNow(d.whitelistLandedBy, relay.block)}`,
-    );
-    report.check(
-      d.enactAt > relay.block,
+      t.enactAt > relay.block,
       "enactment block in the future",
-      `relay #${d.enactAt}, ≈ ${deadlinesUtc.enactAt}, ${daysFromNow(d.enactAt, relay.block)}`,
+      `relay #${t.enactAt}, ≈ ${timingUtc.enactAt}, ${daysFromNow(t.enactAt, relay.block)}`,
     );
 
     // Deposits the submitter needs.
@@ -160,7 +132,7 @@ main(async () => {
     intro: [
       `Read-only checks by \`src/cli/preflight.ts\` against live Polkadot state. State: ${describeState(chains)}.`,
     ],
-    state: { ...stateOf(chains), ...(deadlinesUtc && { deadlinesUtc }) },
+    state: { ...stateOf(chains), ...(timingUtc && { timingUtc }) },
   });
 });
 

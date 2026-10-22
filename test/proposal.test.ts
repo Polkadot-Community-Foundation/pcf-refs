@@ -17,19 +17,24 @@ function withParams(edit: (p: Params) => void): string {
 
 describe("loadProposal", () => {
   it("loads the committed proposal", () => {
-    assert.equal(loadProposal("proposals/app-onboarding").params.names.length, 3);
+    assert.equal(loadProposal("proposals/app-onboarding").params.supersedes.length, 1);
   });
 
   it("rejects a malformed H160", () => {
-    assert.throws(() => loadProposal(withParams((p) => (p.namesOwner = "0x1234"))), /namesOwner/);
+    assert.throws(() => loadProposal(withParams((p) => (p.dispatcher = "0x1234"))), /dispatcher/);
   });
 
   it("rejects a bad SS58 account", () => {
     assert.throws(() => loadProposal(withParams((p) => (p.attester = "not-an-address"))));
   });
 
-  it("rejects labels that are not bare lowercase", () => {
-    assert.throws(() => loadProposal(withParams((p) => (p.names = ["GetCash"]))), /names/);
+  it("rejects a superseded call hash that is not 32 bytes of lowercase hex", () => {
+    assert.throws(() => loadProposal(withParams((p) => (p.supersedes = ["0x1234"]))), /supersedes/);
+  });
+
+  it("rejects a superseded call hash listed twice", () => {
+    const hash = `0x${"ab".repeat(32)}` as const;
+    assert.throws(() => loadProposal(withParams((p) => (p.supersedes = [hash, hash]))), /twice/);
   });
 
   it("rejects a non-positive allowance", () => {

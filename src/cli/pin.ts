@@ -4,7 +4,7 @@
  *
  * - `enactAt` (null): current relay block + `enactInDays`
  *
- * A value already set is kept. To move it, set it back to null and pin again. Only `Referenda.submit` and the deadlines
+ * A value already set is kept. To move it, set it back to null and pin again. Only `Referenda.submit` and the timing
  * change: the inner call and the preimage do not depend on it.
  */
 import { BLOCKS_PER_DAY, connect } from "../lib/chains.ts";

@@ -4,6 +4,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import type { HexString } from "polkadot-api";
 import type { Address } from "viem";
 import { descriptors, type Endpoints } from "./chains.ts";
 import { toJson, toSs58 } from "./format.ts";
@@ -17,20 +18,10 @@ export interface Params {
   count: number;
   /** DotNS contract the gateway forwards name reservations to (the PopController proxy). */
   dispatcher: Address;
-  /** Labels granted on the DotNS name whitelist. */
-  names: string[];
-  /** H160 the names are granted to. */
-  namesOwner: Address;
-  dotns: {
-    release: string;
-    nameWhitelist: Address;
-    registrarController: Address;
-    registrar: Address;
-  };
-  /** Revive weight limit for `grantNames`, as decimal strings. */
-  grantWeight: { refTime: string; proofSize: string };
-  /** Revive storage deposit limit for `grantNames`, in planck. Root is not charged, but 0 reverts the call. */
-  grantStorageDepositLimit: string;
+  /** Inner call hashes of earlier versions, removed from the Asset Hub whitelist by the Fellowship referendum. */
+  supersedes: HexString[];
+  /** DotNS release the dispatcher address comes from. */
+  dotns: { release: string };
   /** Delay used by `pin` when `enactAt` is null. */
   enactInDays: number;
   /** Relay block the Whitelisted Caller referendum enacts at. */
@@ -76,7 +67,7 @@ export function requirePinned(params: Params): PinnedParams {
 }
 
 const H160 = /^0x[0-9a-fA-F]{40}$/;
-const LABEL = /^[a-z0-9-]+$/;
+const H256 = /^0x[0-9a-f]{64}$/;
 /** Keys params.json may have. */
 const KEYS: Record<keyof Params, true> = {
   title: true,
@@ -84,11 +75,8 @@ const KEYS: Record<keyof Params, true> = {
   attester: true,
   count: true,
   dispatcher: true,
-  names: true,
-  namesOwner: true,
+  supersedes: true,
   dotns: true,
-  grantWeight: true,
-  grantStorageDepositLimit: true,
   enactInDays: true,
   enactAt: true,
   submitter: true,
@@ -100,15 +88,7 @@ function validate(p: Params): void {
   };
   for (const key of Object.keys(p)) if (!Object.hasOwn(KEYS, key)) fail(`unknown key ${key}`);
   for (const key of Object.keys(KEYS)) if (!Object.hasOwn(p, key)) fail(`missing key ${key}`);
-  for (const [key, value] of Object.entries({
-    dispatcher: p.dispatcher,
-    namesOwner: p.namesOwner,
-    "dotns.nameWhitelist": p.dotns.nameWhitelist,
-    "dotns.registrarController": p.dotns.registrarController,
-    "dotns.registrar": p.dotns.registrar,
-  })) {
-    if (!H160.test(value)) fail(`${key} must be a 0x-prefixed H160`);
-  }
+  if (!H160.test(p.dispatcher)) fail("dispatcher must be a 0x-prefixed H160");
   for (const chain of Object.keys(descriptors) as (keyof Endpoints)[]) {
     const urls = p.endpoints[chain];
     if (!Array.isArray(urls) || urls.length === 0 || !urls.every((u) => /^wss?:\/\//.test(u))) {
@@ -118,5 +98,8 @@ function validate(p: Params): void {
   toSs58(p.attester);
   if (p.submitter !== null) toSs58(p.submitter);
   if (!Number.isSafeInteger(p.count) || p.count <= 0) fail("count must be a positive integer");
-  if (p.names.length === 0 || !p.names.every((n) => LABEL.test(n))) fail("names must be bare lowercase labels");
+  if (!Array.isArray(p.supersedes) || !p.supersedes.every((h) => H256.test(h))) {
+    fail("supersedes must be a list of 0x-prefixed lowercase 32-byte call hashes");
+  }
+  if (new Set(p.supersedes).size !== p.supersedes.length) fail("supersedes lists a call hash twice");
 }

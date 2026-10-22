@@ -2,8 +2,8 @@
  * Post-enactment checks: the state the package should leave behind. Shared by `verify` (live chains) and `rehearse`
  * (a fork). They also report consumption, for the periodic updates the proposal promises.
  */
+import type { HexString } from "polkadot-api";
 import type { Chain } from "./chains.ts";
-import { CONTROLLER_ABI, NAME_STATUS, REGISTRAR_ABI, readContract, tokenIdOf, WHITELIST_ABI } from "./dotns.ts";
 import { formatCount, sameAddress, toSs58 } from "./format.ts";
 import type { Params } from "./proposal.ts";
 import type { Report } from "./report.ts";
@@ -17,30 +17,26 @@ export interface EnactedChains {
 export interface Targets {
   allowance: { assetHub: number; people: number };
   dispatcher: string | undefined;
-  names: Record<string, { status: string; grantee: string; available: boolean }>;
+  /** Whether each superseded call hash is whitelisted on Asset Hub. */
+  superseded: Record<string, boolean>;
 }
 
 export async function readTargets({ assetHub: ah, people }: EnactedChains, p: Params): Promise<Targets> {
   const attester = toSs58(p.attester);
-  const names: Targets["names"] = {};
-  for (const label of p.names) {
-    names[label] = {
-      status: nameStatus(await readContract(ah, p.dotns.nameWhitelist, WHITELIST_ABI, "statusOf", [label])),
-      grantee: await readContract(ah, p.dotns.nameWhitelist, WHITELIST_ABI, "granteeOf", [label]),
-      available: await readContract(ah, p.dotns.registrarController, CONTROLLER_ABI, "available", [label]),
-    };
-  }
+  const superseded: Targets["superseded"] = {};
+  for (const hash of p.supersedes) superseded[hash] = await isWhitelisted(ah, hash);
   return {
     allowance: {
       assetHub: (await ah.api.query.DotnsGateway.AttestationAllowance.getValue(attester, { at: ah.at })) ?? 0,
       people: (await people.api.query.PeopleLite.AttestationAllowance.getValue(attester, { at: people.at })) ?? 0,
     },
     dispatcher: await ah.api.query.DotnsGateway.DispatcherAddress.getValue({ at: ah.at }),
-    names,
+    superseded,
   };
 }
 
-const nameStatus = (ordinal: number): string => NAME_STATUS[ordinal] ?? `unknown status ${ordinal}`;
+const isWhitelisted = async (ah: Chain<"assetHub">, hash: HexString): Promise<boolean> =>
+  (await ah.api.query.Whitelist.WhitelistedCall.getValue(hash, { at: ah.at })) !== undefined;
 
 /** Checks that enactment changed exactly what the package grants, from `before` to `after`. */
 export function checkTransition(before: Targets, after: Targets, p: Params, report: Report): void {
@@ -59,16 +55,11 @@ export function checkTransition(before: Targets, after: Targets, p: Params, repo
     "dispatcher changed to the proposed address",
     `${before.dispatcher ?? "unset"} → ${after.dispatcher ?? "unset"}`,
   );
-  for (const label of p.names) {
-    const [b, a] = [before.names[label], after.names[label]];
+  for (const hash of p.supersedes) {
     report.check(
-      b?.status === "Open" &&
-        b.available &&
-        a?.status === "Claimed" &&
-        sameAddress(a.grantee, p.namesOwner) &&
-        a.available,
-      `${label}.dot went from Open to granted to the names owner, still unregistered`,
-      `status ${b?.status} → ${a?.status}, grantee ${b?.grantee} → ${a?.grantee}`,
+      before.superseded[hash] === true && after.superseded[hash] === false,
+      `superseded call ${hash} went from whitelisted to removed`,
+      `${before.superseded[hash]} → ${after.superseded[hash]}`,
     );
   }
 }
@@ -92,20 +83,7 @@ export async function checkEnacted({ assetHub: ah, people }: EnactedChains, p: P
   const dispatcher = await ah.api.query.DotnsGateway.DispatcherAddress.getValue({ at: ah.at });
   report.check(Boolean(dispatcher && sameAddress(dispatcher, p.dispatcher)), "dispatcher set", dispatcher ?? "unset");
 
-  // Names: granted to the names owner, or already registered by it.
-  for (const label of p.names) {
-    const available = await readContract(ah, p.dotns.registrarController, CONTROLLER_ABI, "available", [label]);
-    if (!available) {
-      const owner = await readContract(ah, p.dotns.registrar, REGISTRAR_ABI, "ownerOf", [tokenIdOf(label)]);
-      report.check(sameAddress(owner, p.namesOwner), `${label}.dot registered to the names owner`, `owner ${owner}`);
-      continue;
-    }
-    const status = NAME_STATUS[await readContract(ah, p.dotns.nameWhitelist, WHITELIST_ABI, "statusOf", [label])];
-    const grantee = await readContract(ah, p.dotns.nameWhitelist, WHITELIST_ABI, "granteeOf", [label]);
-    report.check(
-      status === "Claimed" && sameAddress(grantee, p.namesOwner),
-      `${label}.dot granted to the names owner, not yet registered`,
-      `status ${status}, grantee ${grantee}`,
-    );
+  for (const hash of p.supersedes) {
+    report.check(!(await isWhitelisted(ah, hash)), `superseded call ${hash} no longer whitelisted`);
   }
 }

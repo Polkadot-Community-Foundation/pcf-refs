@@ -6,43 +6,45 @@ Decoded by `src/cli/decode.ts` from the bytes in `calls.json` against live metad
 
 | | |
 |---|---|
-| Preimage hash | `0x294b20f9659cfb82c624b9391106bb3533cad0921e595b70389b12ab68e8e54a` |
-| Preimage length | 549 bytes |
-| Whitelisted (inner) call hash | `0x90640a174e1d62b5645f31cb053d562e95a63881fd1e0f9197edbbcf83e21fad` |
-| Inner call length | 547 bytes |
+| Preimage hash | `0x681f287489eea7db8bf4a37c03d4f8f861fa69565c313aa5e45dbf1a6ff29325` |
+| Preimage length | 120 bytes |
+| Whitelisted (inner) call hash | `0x33ed6c42bb4078327a29bf59f8cb34c9df2f93703c3c624e47dc967b4a4af03f` |
+| Inner call length | 118 bytes |
 
-- **Asset Hub** `Whitelist.dispatch_whitelisted_call_with_preimage`: dispatches with Root the call whose hash the Fellowship whitelisted, `0x90640a174e1d62b5645f31cb053d562e95a63881fd1e0f9197edbbcf83e21fad` (547 B)
-  - **Asset Hub** `Utility.batch_all`: 4 calls, all or nothing
+- **Asset Hub** `Whitelist.dispatch_whitelisted_call_with_preimage`: dispatches with Root the call whose hash the Fellowship whitelisted, `0x33ed6c42bb4078327a29bf59f8cb34c9df2f93703c3c624e47dc967b4a4af03f` (118 B)
+  - **Asset Hub** `Utility.batch_all`: 3 calls, all or nothing
     - **Asset Hub** `DotnsGateway.increase_attestation_allowance` `{"account":"15sDLj4T9NnCtT665koDMxBs1PZw3rzDc6wcz9tN9kKTQ2zj","count":1000000}`
     - **Asset Hub** `DotnsGateway.set_dispatcher_address` `{"address":"0xa06d1cb1e3fedff7b5dfa779b4cc61703f8a46a1"}`
     - **Asset Hub** `PolkadotXcm.send` to parachain 1004 (People), parents 1
       - XCM `UnpaidExecution` `{"weight_limit":{"type":"Unlimited"}}`
       - XCM `Transact`, origin kind `Superuser`
         - **People** `PeopleLite.increase_attestation_allowance` `{"account":"15sDLj4T9NnCtT665koDMxBs1PZw3rzDc6wcz9tN9kKTQ2zj","count":1000000}`
-    - **Asset Hub** `Revive.call` to contract `0xec2f4c007b51c35defa96bf654f357fc850362ab`, value 0, weight limit `{"ref_time":"10000000000","proof_size":"1000000"}`, storage deposit limit 10000000000
-      - Solidity `grantNames` `[["getcash","dotns","browse"],"0xA5C4c241985D77A0296a0FB83E0FA5905e9E39De"]`
 
 ## Fellowship referendum (Collectives, Fellows origin)
 
 Whitelists exactly the inner call hash above: yes.
 
+Removes from the whitelist, in the same batch, the inner call hash it supersedes: `0x90640a174e1d62b5645f31cb053d562e95a63881fd1e0f9197edbbcf83e21fad`.
+
 - **Collectives** `FellowshipReferenda.submit`: track origin `FellowshipOrigins.Fellows`, enactment `After(10)`
   - **Collectives** `PolkadotXcm.send` to parachain 1000 (Asset Hub), parents 1
     - XCM `UnpaidExecution` `{"weight_limit":{"type":"Unlimited"}}`
     - XCM `Transact`, origin kind `Xcm`
-      - **Asset Hub** `Whitelist.whitelist_call`: whitelists call hash `0x90640a174e1d62b5645f31cb053d562e95a63881fd1e0f9197edbbcf83e21fad`
+      - **Asset Hub** `Utility.batch_all`: 2 calls, all or nothing
+        - **Asset Hub** `Whitelist.remove_whitelisted_call`: removes call hash `0x90640a174e1d62b5645f31cb053d562e95a63881fd1e0f9197edbbcf83e21fad` from the whitelist
+        - **Asset Hub** `Whitelist.whitelist_call`: whitelists call hash `0x33ed6c42bb4078327a29bf59f8cb34c9df2f93703c3c624e47dc967b4a4af03f`
 
 ## Referendum submission (Asset Hub)
 
-Enactment is fixed at relay block 33539498. The Fellowship referendum must be submitted by relay block 33424298 and the whitelist must be on Asset Hub by relay block 33525098.
+The referendum enacts from relay block 33698272. A Fellowship referendum proposed before relay block 33583072 whitelists the call before then.
 
-- **Asset Hub** `Referenda.submit`: track origin `Origins.WhitelistedCaller`, proposal `Lookup` `{"hash":"0x294b20f9659cfb82c624b9391106bb3533cad0921e595b70389b12ab68e8e54a","len":549}`, enactment `At(33539498)`
+- **Asset Hub** `Referenda.submit`: track origin `Origins.WhitelistedCaller`, proposal `Lookup` `{"hash":"0x681f287489eea7db8bf4a37c03d4f8f861fa69565c313aa5e45dbf1a6ff29325","len":120}`, enactment `At(33698272)`
 
 ## Raw bytes
 
 | Item | Hex |
 |---|---|
-| Referendum preimage (`Preimage.note_preimage` input) | `0x40032802109802d73cbe95c22972969358215bd2380a16fb696a2154f1b1777d3dada8e94cab0d40420f009804a06d1cb1e3fedff7b5dfa779b4cc61703f8a46a11f0005010100b10f05082f0000060200983e00d73cbe95c22972969358215bd2380a16fb696a2154f1b1777d3dada8e94cab0d40420f005a01ec2f4c007b51c35defa96bf654f357fc850362ab000700e40b540202093d000700e40b5402110660c7a7760000000000000000000000000000000000000000000000000000000000000040000000000000000000000000a5c4c241985d77a0296a0fb83e0fa5905e9e39de0000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000000767657463617368000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005646f746e73000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000662726f7773650000000000000000000000000000000000000000000000000000` |
-| Inner call (whitelisted) | `0x2802109802d73cbe95c22972969358215bd2380a16fb696a2154f1b1777d3dada8e94cab0d40420f009804a06d1cb1e3fedff7b5dfa779b4cc61703f8a46a11f0005010100b10f05082f0000060200983e00d73cbe95c22972969358215bd2380a16fb696a2154f1b1777d3dada8e94cab0d40420f005a01ec2f4c007b51c35defa96bf654f357fc850362ab000700e40b540202093d000700e40b5402110660c7a7760000000000000000000000000000000000000000000000000000000000000040000000000000000000000000a5c4c241985d77a0296a0fb83e0fa5905e9e39de0000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000000767657463617368000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005646f746e73000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000662726f7773650000000000000000000000000000000000000000000000000000` |
-| `FellowshipReferenda.submit` (Collectives) | `0x3d003e0201cc1f0005010100a10f05082f000006030088400090640a174e1d62b5645f31cb053d562e95a63881fd1e0f9197edbbcf83e21fad010a000000` |
-| `Referenda.submit` (Asset Hub) | `0x3e003f0d02294b20f9659cfb82c624b9391106bb3533cad0921e595b70389b12ab68e8e54a2502000000aac5ff01` |
+| Referendum preimage (`Preimage.note_preimage` input) | `0x400328020c9802d73cbe95c22972969358215bd2380a16fb696a2154f1b1777d3dada8e94cab0d40420f009804a06d1cb1e3fedff7b5dfa779b4cc61703f8a46a11f0005010100b10f05082f0000060200983e00d73cbe95c22972969358215bd2380a16fb696a2154f1b1777d3dada8e94cab0d40420f00` |
+| Inner call (whitelisted) | `0x28020c9802d73cbe95c22972969358215bd2380a16fb696a2154f1b1777d3dada8e94cab0d40420f009804a06d1cb1e3fedff7b5dfa779b4cc61703f8a46a11f0005010100b10f05082f0000060200983e00d73cbe95c22972969358215bd2380a16fb696a2154f1b1777d3dada8e94cab0d40420f00` |
+| `FellowshipReferenda.submit` (Collectives) | `0x3d003e020165011f0005010100a10f05082f00000603001d01280208400190640a174e1d62b5645f31cb053d562e95a63881fd1e0f9197edbbcf83e21fad400033ed6c42bb4078327a29bf59f8cb34c9df2f93703c3c624e47dc967b4a4af03f010a000000` |
+| `Referenda.submit` (Asset Hub) | `0x3e003f0d02681f287489eea7db8bf4a37c03d4f8f861fa69565c313aa5e45dbf1a6ff293257800000000e0310202` |
